@@ -1,0 +1,8 @@
+{
+  "name": "cadence-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Studio vidéo pour créer des vidéos de marque pour tes clients, rendu MP4 dans le navigateur, sur Cloudflare Workers + D1",
+  "scripts": { "dev": "wrangler dev", "deploy": "wrangler deploy" },
+  "devDependencies": { "wrangler": "^4.20.0" }
+}

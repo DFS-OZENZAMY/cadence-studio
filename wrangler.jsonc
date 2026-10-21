@@ -1,0 +1,17 @@
+{
+  // Cadence — studio vidéo (Cloudflare Workers + fichiers statiques + D1)
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cadence-studio",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-09-01",
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      // Pas d'ID figé : au déploiement, Wrangler se connecte à « cadence-db »
+      // si elle existe, ou la crée. Le Worker crée ses tables tout seul.
+      "database_name": "cadence-db"
+    }
+  ],
+  "observability": { "enabled": true }
+}
