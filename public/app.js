@@ -1017,7 +1017,7 @@ function recordingHud() {
   };
   upd();
   const finish = async (save) => {
-    clearTimeout(timer); hud.remove(); $('#recCamFloat')?.remove(); try { pipWin?.close(); } catch { /* rien */ } pipWin = null;
+    clearTimeout(timer); hud.remove(); try { pipWin?.close(); } catch { /* rien */ } pipWin = null;
     const ctl = recCtl; recCtl = null; if (!ctl) return;
     if (!save) { ctl.cancel(); toast('Enregistrement abandonné'); return; }
     const res = await ctl.stop();
@@ -1035,14 +1035,11 @@ function recordingHud() {
   // Fenêtre flottante toujours visible (Chrome, Edge) : minuteur, pause, terminer
   const openPip = () => {
     if (!window.documentPictureInPicture || pipWin) return;
-    const hasCam = !!recCtl?.camStream;
-    documentPictureInPicture.requestWindow({ width: 340, height: hasCam ? 396 : 84 }).then((w) => {
+    documentPictureInPicture.requestWindow({ width: 380, height: 76 }).then((w) => {
       pipWin = w;
       [...document.styleSheets].forEach((ss) => { try { const s = w.document.createElement('style'); s.textContent = [...ss.cssRules].map((r) => r.cssText).join('\n'); w.document.head.append(s); } catch { /* feuille externe */ } });
-      w.document.body.className = `pip-body${hasCam ? ' with-cam' : ''}`;
-      w.document.body.innerHTML = `${hasCam ? '<div class="pip-cam"><video id="pipCam" muted playsinline autoplay></video></div>' : ''}<div class="rec-hud pip" id="recHud">${hud.innerHTML}</div>`;
-      const pv = w.document.getElementById('pipCam');
-      if (pv && recCtl?.camStream) { pv.srcObject = recCtl.camStream; pv.play().catch(() => {}); }
+      w.document.body.className = 'pip-body';
+      w.document.body.innerHTML = `<div class="rec-hud pip" id="recHud">${hud.innerHTML}</div>`;
       w.document.getElementById('recPause').onclick = togglePause;
       w.document.getElementById('recStop').onclick = () => finish(true);
       w.document.getElementById('recCancel').onclick = () => finish(false);
@@ -1052,12 +1049,6 @@ function recordingHud() {
   };
   hud.querySelector('#recPip')?.addEventListener('click', openPip);
   openPip();
-  // Navigateur sans fenêtre flottante (Firefox, Safari) : aperçu de la caméra dans la page
-  if (!window.documentPictureInPicture && recCtl?.camStream) {
-    const f = document.createElement('video'); f.className = 'rec-cam-float'; f.id = 'recCamFloat'; f.muted = true; f.playsInline = true; f.autoplay = true; f.srcObject = recCtl.camStream;
-    document.body.append(f); f.play().catch(() => {});
-  }
-  if (recCtl?.surface === 'monitor' && recCtl.camStream && window.documentPictureInPicture) toast('Tu partages tout l’écran : la fenêtre flottante peut apparaître dans la vidéo. Partage plutôt une fenêtre ou un onglet pour n’avoir que la bulle ronde.');
 }
 
 /* Après l'enregistrement : revoir, nommer, envoyer sur Drive ou télécharger */
