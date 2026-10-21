@@ -1,5 +1,6 @@
 /* Cadence — application */
 import * as V from './engine.js';
+import { drawCharacter, synthTalk, SKINS, HAIR_COLORS, HAIR_STYLES, DEFAULT_CHAR } from './avatar.js';
 const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND } = V;
 
 /* =========================================================
@@ -50,8 +51,13 @@ const ICONS = {
   rec: '<circle cx="12" cy="12" r="5"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
   start: '<path d="M6 5v14M18 6l-9 6 9 6z"/>',
+  avatars: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  mic: '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  upload: '<path d="M12 21V9M7 14l5-5 5 5M4 4h16"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
 };
-const ic = (n, cls = '') => `<svg class="ic ${n === 'play' || n === 'pause' || n === 'rec' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const ic = (n, cls = '') => `<svg class="ic ${n === 'play' || n === 'pause' || n === 'rec' || n === 'stop' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#5A3DF0"/><path d="M11 9.5v13l11-6.5z" fill="#fff"/><circle cx="24.5" cy="8.5" r="3" fill="#FF8A3D"/></svg>`;
 
 function toast(msg, kind = '') {
@@ -102,6 +108,41 @@ async function api(path, { method = 'GET', body } = {}) {
   if (!r.ok) throw new Error(d?.error || `Erreur ${r.status}`);
   return d;
 }
+const mediaBlobs = new Map(), mediaUrls = new Map();
+function fetchMedia(id) {
+  if (!mediaBlobs.has(id)) mediaBlobs.set(id, fetch(`/api/media/${id}`, { credentials: 'same-origin' }).then((r) => { if (!r.ok) throw new Error('Fichier introuvable'); return r.blob(); }).catch((e) => { mediaBlobs.delete(id); throw e; }));
+  return mediaBlobs.get(id);
+}
+async function mediaSrc(id) { if (!mediaUrls.has(id)) mediaUrls.set(id, URL.createObjectURL(await fetchMedia(id))); return mediaUrls.get(id); }
+async function uploadMedia(blob, kind, name = '') {
+  const r = await fetch(`/api/media?kind=${kind}&name=${encodeURIComponent(name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': blob.type || `${kind}/octet-stream` }, body: blob });
+  let d = null; try { d = await r.json(); } catch { /* rien */ }
+  if (!r.ok) throw new Error(d?.error || 'Envoi du fichier impossible');
+  mediaBlobs.set(d.id, Promise.resolve(blob));
+  return d.id;
+}
+/** Convertit un audio en WAV mono 24 kHz, normalisé et sans silences au début et à la fin. */
+async function toWav(blob, sr = 24000) {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await ac.decodeAudioData(await blob.arrayBuffer()); ac.close();
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(buf.duration * sr)), sr);
+  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  const data = (await off.startRendering()).getChannelData(0);
+  let peak = 0; for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
+  const thr = peak * 0.06; let a = 0, b = data.length - 1;
+  while (a < b && Math.abs(data[a]) < thr) a++; while (b > a && Math.abs(data[b]) < thr) b--;
+  a = Math.max(0, a - Math.round(sr * 0.12)); b = Math.min(data.length - 1, b + Math.round(sr * 0.25));
+  const pcm = data.subarray(a, b + 1), g = peak > 0 ? Math.min(6, 0.92 / peak) : 1;
+  const out = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(out);
+  const w = (o, str) => [...str].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) v.setInt16(44 + i * 2, clamp(pcm[i] * g, -1, 1) * 0x7fff, true);
+  return new Blob([out], { type: 'audio/wav' });
+}
+const fmtUsd = (n) => `${(+n || 0).toFixed(2).replace('.', ',')} $`;
+const TTS_VOICES = { 'Voix féminines': ['Aria', 'Sarah', 'Laura', 'Charlotte', 'Alice', 'Matilda', 'Jessica', 'Lily'], 'Voix masculines': ['George', 'Roger', 'Charlie', 'Callum', 'Liam', 'Will', 'Eric', 'Chris', 'Brian', 'Daniel', 'Bill'] };
+
 async function passHash(pw, saltHex) {
   const salt = Uint8Array.from(saltHex.match(/../g), (h) => parseInt(h, 16));
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
@@ -175,7 +216,7 @@ async function brandAssets(brand) {
 /* =========================================================
    État global
    ========================================================= */
-const state = { studio: 'Cadence', clients: [], projects: [], filter: 'all', salt: '', authed: false };
+const state = { studio: 'Cadence', clients: [], projects: [], avatars: [], ai: { configured: false, monthSpent: 0 }, filter: 'all', salt: '', authed: false };
 const clientById = (id) => state.clients.find((c) => c.id === id);
 const brandOf = (clientId) => { const c = clientById(clientId); return c ? V.normBrand({ ...c.brand, name: c.name }) : V.normBrand(DEMO_BRAND); };
 
@@ -246,14 +287,14 @@ function authScreen(mode, message = '') {
   });
 }
 async function loadAll() {
-  const [clients, projects] = await Promise.all([api('/api/clients'), api('/api/projects')]);
-  state.clients = clients; state.projects = projects;
+  const [clients, projects, avatars, ai] = await Promise.all([api('/api/clients'), api('/api/projects'), api('/api/avatars'), api('/api/ai/status').catch(() => state.ai)]);
+  state.clients = clients; state.projects = projects; state.avatars = avatars; state.ai = ai;
 }
 
 /* =========================================================
    Navigation
    ========================================================= */
-const NAV = [['projets', 'Projets', 'projects'], ['clients', 'Clients', 'clients'], ['modeles', 'Modèles', 'templates'], ['exports', 'Exports', 'exports'], ['reglages', 'Réglages', 'settings']];
+const NAV = [['projets', 'Projets', 'projects'], ['clients', 'Clients', 'clients'], ['avatars', 'Avatars', 'avatars'], ['modeles', 'Modèles', 'templates'], ['exports', 'Exports', 'exports'], ['reglages', 'Réglages', 'settings']];
 function route() {
   if (!state.authed) return;
   const h = location.hash.replace(/^#\/?/, '');
@@ -261,7 +302,7 @@ function route() {
   if (page === 'editeur' && id) return openEditor(id);
   stopEditor();
   const p = NAV.some(([k]) => k === page) ? page : 'projets';
-  const counts = { projets: state.projects.length, clients: state.clients.length };
+  const counts = { projets: state.projects.length, clients: state.clients.length, avatars: state.avatars.length };
   $('#root').innerHTML = `<div class="shell">
     <nav class="rail" aria-label="Navigation principale">
       <div class="wordmark">${LOGO}Cadence</div>
@@ -561,6 +602,178 @@ async function extractColors(src) {
 }
 
 /* =========================================================
+   Page : Avatars
+   ========================================================= */
+const avatarData = (a) => (a ? (a.kind === 'photo' ? { id: a.id, kind: 'photo', name: a.name, photo: a.data.photo } : { id: a.id, kind: 'illustre', name: a.name, config: a.data.config }) : null);
+function drawAvatarThumb(c, av, brand, t = 1.2) {
+  const B = V.normBrand(brand), x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, 0, c.height); g.addColorStop(0, V.mix(B.colors.dark, B.colors.primary, 0.35)); g.addColorStop(1, B.colors.dark);
+  x.fillStyle = g; x.fillRect(0, 0, c.width, c.height);
+  drawCharacter(x, av?.config || DEFAULT_CHAR, c.width / 2, c.height * 1.02, (c.height * 1.05) / 820, { t, talk: 0, dir: 1, outfit: B.colors.primary, accent: B.colors.secondary });
+}
+function presenterPreview(av, layout = 'plein', script = 'Bonjour ! Je suis votre présentateur. Je parle aux couleurs de vos clients.') {
+  return { scenes: [{ id: 'av-prev', type: 'presentateur', duration: 7, transition: 'fondu', bg: 'auto', props: { ...structuredClone(V.SCENES.presentateur.defaults), avatar: av, layout, script, title: layout === 'plein' ? '' : 'Votre message', captions: true } }], fadeOut: false };
+}
+PAGES.avatars = () => `
+  <header class="page-head"><div><h1>Avatars</h1><p class="sub">Les présentateurs qui parlent dans tes vidéos. Les illustrés sont gratuits ; les avatars photo s’animent par IA.</p></div>
+    <div class="row" style="flex-wrap:wrap"><button class="btn lg" data-act="newPhotoAvatar">${ic('spark')}Avatar photo réaliste</button><button class="btn primary lg" data-act="newIllustrated">${ic('plus')}Présentateur illustré</button></div></header>
+  <div class="grid">
+    <button class="new-card" data-act="newIllustrated"><span class="plus">${ic('avatars')}</span>Créer un présentateur<span class="hint">Gratuit, illimité</span></button>
+    ${state.avatars.map((a) => `<article class="card"><button class="card-open" data-act="editAvatar" data-id="${a.id}" data-hover>
+      <div class="thumb">${a.kind === 'photo' ? `<img data-media="${a.data.photo}" alt="">` : '<canvas></canvas>'}<span class="badge fmt">${a.kind === 'photo' ? 'Réaliste, IA' : 'Illustré'}</span></div>
+      <div class="card-body"><strong>${esc(a.name)}</strong><span class="card-meta">${a.kind === 'photo' ? 'Vidéo générée par fal.ai, environ 0,06 $ par seconde' : 'Animé gratuitement par Cadence'}</span></div></button></article>`).join('')}
+  </div>
+  ${!state.ai.configured ? `<div class="panel" style="margin-top:24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:240px"><h3>Avatars réalistes et voix IA</h3><p class="muted">Ajoute une clé fal.ai dans les Réglages pour faire parler une photo et générer des voix à partir d’un texte. Tu ne paies que ce que tu génères.</p></div><a class="btn" href="#/reglages">${ic('settings')}Configurer</a></div>` : ''}`;
+AFTER.avatars = async () => {
+  const brand = brandOf(state.clients[0]?.id);
+  await V.ensureFonts(brand);
+  $$('[data-act="editAvatar"]').forEach((b) => {
+    const a = state.avatars.find((x) => x.id === b.dataset.id);
+    const c = b.querySelector('canvas');
+    if (c) live(c, { project: presenterPreview(avatarData(a)), brand, assets: { logo: null, images: {} }, hoverOnly: true, hero: 1.2 });
+  });
+  $$('img[data-media]').forEach(async (img) => { try { img.src = await mediaSrc(img.dataset.media); } catch { /* rien */ } });
+};
+
+function illustratedDialog(id = null, onSaved) {
+  const a = id ? state.avatars.find((x) => x.id === id) : null;
+  const cfg = structuredClone({ ...DEFAULT_CHAR, ...(a?.data.config || {}) });
+  const brand = brandOf(ed ? P().clientId : state.clients[0]?.id);
+  let L = null;
+  const sw = (k, list) => `<div class="swatch-row">${list.map((c) => `<button type="button" class="swatch" style="--sc:${c}" data-sw="${k}" data-v="${c}" aria-pressed="${cfg[k] === c}" aria-label="${c}"></button>`).join('')}</div>`;
+  openModal(`<form class="dlg" data-local autocomplete="off">
+    <div class="dlg-head"><div><h2>${a ? esc(a.name) : 'Nouveau présentateur illustré'}</h2><p>Gratuit et illimité. Il bouge, cligne des yeux et parle au rythme de la voix.</p></div><button class="icon-btn" type="button" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="brand-editor">
+      <div style="display:grid;gap:16px;align-content:start">
+        <label class="field"><span>Nom</span><input name="name" value="${esc(a?.name || 'Présentateur')}" required ${a ? '' : 'autofocus'}></label>
+        <div class="field"><span>Teint</span>${sw('skin', SKINS)}</div>
+        <div class="field"><span>Coiffure</span><div class="chips">${Object.entries(HAIR_STYLES).map(([k, l]) => `<button type="button" class="chip ${cfg.hair === k ? 'on' : ''}" data-hair="${k}">${l}</button>`).join('')}</div></div>
+        <div class="field"><span>Couleur des cheveux</span>${sw('hairColor', HAIR_COLORS)}</div>
+        <div class="field"><span>Tenue</span><div class="row" style="flex-wrap:wrap"><div class="segmented"><button type="button" data-outfit="marque" aria-pressed="${cfg.outfit === 'marque'}">Couleur du client</button><button type="button" data-outfit="perso" aria-pressed="${cfg.outfit !== 'marque'}">Personnalisée</button></div>
+          <span class="color-pick" style="width:150px" ${cfg.outfit === 'marque' ? 'hidden' : ''} id="outfitPick"><input type="color" name="outfitColor" value="${esc(cfg.outfitColor)}" aria-label="Couleur de la tenue"><span class="hint">Tenue</span></span></div></div>
+        <div class="row" style="flex-wrap:wrap;gap:18px"><label class="switch"><input type="checkbox" name="glasses" ${cfg.glasses ? 'checked' : ''}>Lunettes</label><label class="switch"><input type="checkbox" name="beard" ${cfg.beard ? 'checked' : ''}>Barbe</label><label class="switch"><input type="checkbox" name="earrings" ${cfg.earrings ? 'checked' : ''}>Boucles d’oreilles</label></div>
+      </div>
+      <div class="brand-preview"><div class="stage-box"><canvas id="charCanvas"></canvas></div><p class="hint">Aperçu en mouvement, aux couleurs de ${esc(brand.name)}.</p></div>
+    </div>
+    <div class="dlg-foot">${a ? `<button class="btn ghost danger" type="button" data-del-avatar>${ic('trash')}Supprimer</button>` : ''}<span class="spacer"></span><button class="btn" type="button" data-close>Annuler</button><button class="btn primary">${a ? 'Enregistrer' : 'Créer le présentateur'}</button></div>
+  </form>`, {
+    size: 'wide',
+    onMount: async (m) => {
+      await V.ensureFonts(brand);
+      const prev = () => presenterPreview({ kind: 'illustre', config: cfg });
+      L = live($('#charCanvas', m), { project: prev(), brand, assets: { logo: null, images: {} } });
+      const upd = () => { L.project = prev(); };
+      const form = $('form', m);
+      form.addEventListener('click', async (e) => {
+        const swb = e.target.closest('[data-sw]'), hb = e.target.closest('[data-hair]'), ob = e.target.closest('[data-outfit]');
+        if (swb) { cfg[swb.dataset.sw] = swb.dataset.v; $$(`[data-sw="${swb.dataset.sw}"]`, m).forEach((x) => x.setAttribute('aria-pressed', x === swb)); upd(); }
+        if (hb) { cfg.hair = hb.dataset.hair; $$('[data-hair]', m).forEach((x) => x.classList.toggle('on', x === hb)); upd(); }
+        if (ob) { cfg.outfit = ob.dataset.outfit === 'marque' ? 'marque' : 'perso'; $$('[data-outfit]', m).forEach((x) => x.setAttribute('aria-pressed', x === ob)); $('#outfitPick', m).hidden = cfg.outfit === 'marque'; upd(); }
+        if (e.target.closest('[data-del-avatar]')) {
+          if (!(await confirmBox({ title: `Supprimer ${a.name} ?`, text: 'Les scènes qui l’utilisent garderont son apparence actuelle.', ok: 'Supprimer', danger: true }))) return;
+          await api(`/api/avatars/${a.id}`, { method: 'DELETE' }); await loadAll(); if (!ed) route(); toast('Avatar supprimé');
+        }
+      });
+      form.addEventListener('input', (e) => {
+        const el = e.target;
+        if (['glasses', 'beard', 'earrings'].includes(el.name)) cfg[el.name] = el.checked;
+        if (el.name === 'outfitColor') cfg.outfitColor = el.value;
+        upd();
+      });
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = form.name.value.trim() || 'Présentateur', btn = form.querySelector('.btn.primary'); btn.disabled = true;
+        try {
+          let newId = a?.id;
+          if (a) await api(`/api/avatars/${a.id}`, { method: 'PUT', body: { name, data: { config: cfg } } });
+          else newId = (await api('/api/avatars', { method: 'POST', body: { name, kind: 'illustre', data: { config: cfg } } })).id;
+          await loadAll(); closeModal(); if (!ed) route();
+          onSaved?.(state.avatars.find((x) => x.id === newId));
+          toast(a ? 'Présentateur enregistré' : `${name} est prêt`, 'ok');
+        } catch (ex) { btn.disabled = false; toast(ex.message, 'error'); }
+      });
+    },
+  });
+}
+function photoAvatarDialog(id = null, onSaved) {
+  const a = id ? state.avatars.find((x) => x.id === id) : null;
+  const brand = brandOf(ed ? P().clientId : state.clients[0]?.id);
+  let file = null, bitmap = null, L = null;
+  openModal(`<form class="dlg" data-local autocomplete="off">
+    <div class="dlg-head"><div><h2>${a ? esc(a.name) : 'Avatar photo réaliste'}</h2><p>Une photo devient un présentateur qui parle, grâce à l’IA (fal.ai, Kling Avatar).</p></div><button class="icon-btn" type="button" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="brand-editor">
+      <div style="display:grid;gap:16px;align-content:start">
+        <label class="field"><span>Nom</span><input name="name" value="${esc(a?.name || '')}" placeholder="Camille, conseillère" required ${a ? '' : 'autofocus'}></label>
+        <div class="field"><span>Photo</span>
+          <div class="logo-drop" id="photoDrop"><div class="prev" id="photoPrev" style="width:84px;height:84px">${ic('image')}</div>
+            <div style="display:grid;gap:8px;flex:1"><button class="btn" type="button" id="photoPick" style="justify-self:start">${a ? 'Remplacer la photo' : 'Choisir une photo'}</button>
+            <span class="hint">De face, buste visible, bien éclairée, fond simple. JPG ou PNG.</span></div></div>
+          <input type="file" accept="image/jpeg,image/png,image/webp" id="photoFile" hidden></div>
+        <label class="row" style="align-items:flex-start;gap:10px;font-size:13.5px"><input type="checkbox" name="consent" ${a ? 'checked' : ''} style="margin-top:3px">J’ai l’accord de la personne représentée pour l’animer et la faire parler par IA, et je le signalerai si la vidéo l’exige.</label>
+        ${state.ai.configured ? '' : '<p class="hint" style="color:var(--rec)">Aucune clé fal.ai configurée : tu pourras créer l’avatar, mais pas encore générer sa vidéo. Ajoute la clé dans Réglages.</p>'}
+      </div>
+      <div class="brand-preview"><div class="stage-box"><canvas id="photoCanvas"></canvas></div><p class="hint">Mise en page « à côté du contenu ». La photo s’animera après génération.</p></div>
+    </div>
+    <p class="form-error" id="paErr"></p>
+    <div class="dlg-foot">${a ? `<button class="btn ghost danger" type="button" data-del-avatar>${ic('trash')}Supprimer</button>` : ''}<span class="spacer"></span><button class="btn" type="button" data-close>Annuler</button><button class="btn primary">${a ? 'Enregistrer' : 'Créer l’avatar'}</button></div>
+  </form>`, {
+    size: 'wide',
+    onMount: async (m) => {
+      await V.ensureFonts(brand);
+      const assets = { logo: null, images: {}, photos: {}, preview: true };
+      const setBitmap = async (bmp, src) => {
+        bitmap = bmp; assets.photos.tmp = bmp;
+        $('#photoPrev', m).innerHTML = `<img src="${src}" alt="" style="width:100%;height:100%;object-fit:cover">`;
+        if (L) L.project = presenterPreview({ kind: 'photo', photo: 'tmp' }, 'cote');
+      };
+      L = live($('#photoCanvas', m), { project: presenterPreview({ kind: 'photo', photo: 'tmp' }, 'cote'), brand, assets });
+      if (a) { try { const src = await mediaSrc(a.data.photo); setBitmap(await createImageBitmap(await fetchMedia(a.data.photo)), src); } catch { /* rien */ } }
+      const take = async (f) => {
+        if (!f || !/^image\//.test(f.type)) return;
+        try {
+          const { src, w, h } = await readImage(f);
+          const k = Math.min(1, 1280 / Math.max(w, h));
+          const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k);
+          c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+          file = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+          await setBitmap(await createImageBitmap(c), c.toDataURL('image/jpeg', 0.6));
+        } catch { toast('Photo illisible.', 'error'); }
+      };
+      $('#photoPick', m).addEventListener('click', () => $('#photoFile', m).click());
+      $('#photoFile', m).addEventListener('change', (e) => take(e.target.files[0]));
+      const drop = $('#photoDrop', m);
+      drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+      drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+      drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('drag'); take(e.dataTransfer.files[0]); });
+      const form = $('form', m);
+      form.addEventListener('click', async (e) => {
+        if (!e.target.closest('[data-del-avatar]')) return;
+        if (!(await confirmBox({ title: `Supprimer ${a.name} ?`, text: 'Les vidéos déjà générées restent dans tes projets.', ok: 'Supprimer', danger: true }))) return;
+        await api(`/api/avatars/${a.id}`, { method: 'DELETE' }); await loadAll(); if (!ed) route(); toast('Avatar supprimé');
+      });
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('#paErr', m); err.textContent = '';
+        const name = form.name.value.trim();
+        if (!name) { err.textContent = 'Donne un nom à cet avatar.'; return; }
+        if (!a && !file) { err.textContent = 'Choisis une photo.'; return; }
+        if (!form.consent.checked) { err.textContent = 'Confirme avoir l’accord de la personne représentée.'; return; }
+        const btn = form.querySelector('.btn.primary'); btn.disabled = true; btn.textContent = 'Envoi…';
+        try {
+          const photo = file ? await uploadMedia(file, 'image', name) : a.data.photo;
+          let newId = a?.id;
+          if (a) await api(`/api/avatars/${a.id}`, { method: 'PUT', body: { name, data: { photo } } });
+          else newId = (await api('/api/avatars', { method: 'POST', body: { name, kind: 'photo', data: { photo } } })).id;
+          await loadAll(); closeModal(); if (!ed) route();
+          onSaved?.(state.avatars.find((x) => x.id === newId));
+          toast(`${name} est prêt`, 'ok');
+        } catch (ex) { btn.disabled = false; btn.textContent = a ? 'Enregistrer' : 'Créer l’avatar'; err.textContent = ex.message; }
+      });
+    },
+  });
+}
+
+/* =========================================================
    Page : Modèles
    ========================================================= */
 PAGES.modeles = () => `
@@ -600,6 +813,12 @@ PAGES.reglages = () => `<header class="page-head"><div><h1>Réglages</h1><p clas
       <div class="grid-2"><label class="field"><span>Actuel</span><input type="password" name="cur" autocomplete="current-password"></label>
       <label class="field"><span>Nouveau, 10 caractères minimum</span><input type="password" name="next" autocomplete="new-password"></label></div>
       <p class="form-error" id="pwErr"></p><div><button class="btn">Changer le mot de passe</button></div></form>
+    <form class="panel" data-local id="aiForm" style="display:grid;gap:14px"><div><h2>Intelligence artificielle</h2><p class="muted" style="margin-top:6px">Avatars photo réalistes et voix à partir d’un texte, via fal.ai. Tu ne paies que ce que tu génères, directement à fal.ai.</p></div>
+      <div class="row" style="flex-wrap:wrap;gap:8px 18px">${state.ai.configured ? `<span style="color:var(--ok);display:flex;gap:6px;align-items:center;font-weight:700">${ic('check')}Clé configurée${state.ai.fromEnv ? ' (variable Cloudflare)' : ''}</span>` : '<span class="muted">Aucune clé configurée</span>'}
+        <span class="muted">Ce mois-ci : <b style="color:var(--ink)">${fmtUsd(state.ai.monthSpent)}</b> pour ${plural(state.ai.monthJobs || 0, 'génération', 'générations')} (estimation)</span></div>
+      ${state.ai.fromEnv ? '' : `<div class="row" style="align-items:flex-end"><label class="field" style="flex:1"><span>Clé d’API fal.ai</span><input name="key" type="password" placeholder="${state.ai.configured ? 'Nouvelle clé pour remplacer l’actuelle' : 'Colle ta clé ici'}" autocomplete="off"></label><button class="btn">Enregistrer</button>${state.ai.configured ? '<button class="btn ghost danger" type="button" id="aiRemove">Retirer</button>' : ''}</div>
+      <p class="hint">Crée ta clé sur fal.ai, rubrique API Keys de ton tableau de bord. Elle reste sur ton serveur Cloudflare et n’est jamais renvoyée au navigateur. Pour plus de sécurité, tu peux aussi la définir comme secret <b>FAL_KEY</b> dans les réglages du Worker.</p>`}
+      <p class="hint">Tarifs indicatifs : voix IA ≈ 0,10 $ pour 1 000 caractères ; avatar Standard ≈ 0,056 $ par seconde, Pro ≈ 0,115 $ par seconde.</p></form>
     <section class="panel" style="display:grid;gap:12px"><h2>Compatibilité de ce navigateur</h2><div id="compat" class="muted">Vérification…</div></section>
   </div>`;
 AFTER.reglages = async () => {
@@ -615,6 +834,11 @@ AFTER.reglages = async () => {
       f.reset(); toast('Mot de passe changé. Les autres appareils sont déconnectés.', 'ok');
     } catch (ex) { $('#pwErr').textContent = ex.message; }
   });
+  $('#aiForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault(); const k = e.target.key?.value.trim(); if (!k) return;
+    try { await api('/api/ai/key', { method: 'PUT', body: { key: k } }); await loadAll(); route(); toast('Clé fal.ai enregistrée', 'ok'); } catch (ex) { toast(ex.message, 'error'); }
+  });
+  $('#aiRemove')?.addEventListener('click', async () => { await api('/api/ai/key', { method: 'PUT', body: { key: '' } }); await loadAll(); route(); toast('Clé retirée'); });
   const box = $('#compat');
   if (!V.supportsExport()) { box.innerHTML = '<b style="color:var(--rec)">Export indisponible.</b> Utilise Google Chrome ou Microsoft Edge à jour pour exporter tes vidéos.'; return; }
   const checks = [];
@@ -637,6 +861,9 @@ const ACT = {
   newClient: () => brandDialog(),
   editClient: (el) => brandDialog(el.dataset.id),
   useTpl: (el) => newVideoDialog(el.dataset.tpl),
+  newIllustrated: () => illustratedDialog(),
+  newPhotoAvatar: () => photoAvatarDialog(),
+  editAvatar: (el) => { const a = state.avatars.find((x) => x.id === el.dataset.id); if (a?.kind === 'photo') photoAvatarDialog(a.id); else illustratedDialog(el.dataset.id); },
   logout: async () => { try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* rien */ } history.replaceState(null, '', location.pathname); authScreen('login'); },
   dupProject: async (el) => {
     try {
@@ -666,7 +893,9 @@ function stopEditor() {
   if (!ed) return;
   const pending = ed.save.flush?.();
   Promise.resolve(pending).then(() => setTimeout(refreshProjects, 400));
-  cancelAnimationFrame(ed.raf); ed.ro?.disconnect();
+  cancelAnimationFrame(ed.raf); ed.ro?.disconnect(); clearInterval(ed.jobTimer);
+  Object.values(ed.assets.voices || {}).forEach((v) => v.el.pause());
+  Object.values(ed.assets.videos || {}).forEach((v) => v.pause());
   removeEventListener('keydown', ed.onKey);
   ed = null;
 }
@@ -688,6 +917,7 @@ async function openEditor(id) {
   await reloadAssets();
   ed.dirty = true;
   ed.raf = requestAnimationFrame(loop);
+  ed.jobTimer = setInterval(pollJobs, 5000); pollJobs();
 }
 const P = () => ed.project;
 const scenesOf = () => P().data.scenes;
@@ -696,8 +926,9 @@ const projForRender = () => ({ ...P().data, format: P().format });
 
 async function reloadAssets() {
   if (!ed) return;
-  const a = await V.prepareAssets(P().data, ed.brand);
+  const a = await V.prepareAssets(P().data, ed.brand, { media: fetchMedia, preview: true });
   if (!ed) return;
+  Object.values(ed.assets.voices || {}).forEach((v) => { if (!Object.values(a.voices).includes(v)) v.el.pause(); });
   ed.assets = a; ed.dirty = true; renderFilm();
 }
 function editorBrandChanged() {
@@ -766,6 +997,7 @@ function loop(ts) {
     if (ed.time >= total) { if (ed.loop) ed.time = 0; else { ed.time = total; setPlaying(false); } }
     ed.dirty = true;
   }
+  V.syncPreview(projForRender(), ed.assets, ed.time, ed.playing, () => { if (ed) ed.dirty = true; });
   if (ed.dirty) {
     const c = $('#edCanvas');
     if (c) V.renderFrame(c.getContext('2d'), c.width, c.height, projForRender(), ed.brand, ed.assets, ed.time);
@@ -832,14 +1064,36 @@ function renderInspector() {
       <div class="row" style="gap:2px"><button class="icon-btn" data-ed="dupScene" title="Dupliquer (Ctrl+D)" aria-label="Dupliquer la scène">${ic('copy')}</button>
       <button class="icon-btn" data-ed="delScene" title="Supprimer (Suppr)" aria-label="Supprimer la scène">${ic('trash')}</button></div></div>
     ${def.fields.map((f) => fieldHtml(f, s.props)).join('')}
+    ${aiVideoSection(s)}
     <div class="insp-sec"><div class="label">Rythme et transition</div>
-      <div class="field"><span>Durée</span><div class="range-row"><input type="range" min="1.5" max="15" step="0.5" value="${s.duration}" data-common="duration" aria-label="Durée en secondes"><output id="durOut">${(+s.duration).toFixed(1).replace('.', ',')} s</output></div></div>
+      <div class="field"><span>Durée</span><div class="range-row"><input type="range" min="1.5" max="${s.type === 'presentateur' ? 60 : 15}" step="0.5" value="${s.duration}" data-common="duration" aria-label="Durée en secondes"><output id="durOut">${(+s.duration).toFixed(1).replace('.', ',')} s</output></div></div>
       <label class="field"><span>Transition d’entrée</span><select data-common="transition" ${ed.sel === 0 ? 'disabled' : ''}>${Object.entries(TRANSITIONS).map(([k, l]) => `<option value="${k}" ${s.transition === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field"><span>Fond</span><select data-common="bg">${Object.entries(BACKGROUNDS).map(([k, l]) => `<option value="${k}" ${(s.bg || 'auto') === k ? 'selected' : ''}>${l}${k === 'auto' ? ` (${esc(BACKGROUNDS[def.bg].toLowerCase())})` : ''}</option>`).join('')}</select></label>
     </div>`;
+  hydrateInspector();
 }
+const videoKey = (p) => `${p.avatar?.photo || ''}|${p.voice || ''}`;
 function fieldHtml(f, props) {
   const v = props[f.k];
+  if (f.type === 'avatar') {
+    return `<div class="field"><span>${esc(f.label)}</span><div class="av-pick">
+      <button class="av-opt" data-ed="pickAvatar" data-id="" aria-pressed="${!v}"><canvas data-av=""></canvas><span>Par défaut</span></button>
+      ${state.avatars.map((a) => `<button class="av-opt" data-ed="pickAvatar" data-id="${a.id}" aria-pressed="${v?.id === a.id}">${a.kind === 'photo' ? `<img data-media="${a.data.photo}" alt="">` : `<canvas data-av="${a.id}"></canvas>`}<span>${esc(a.name)}</span>${a.kind === 'photo' ? '<i class="av-ia">IA</i>' : ''}</button>`).join('')}
+      <button class="av-opt add" data-ed="newAvatar"><span class="plus">${ic('plus')}</span><span>Nouveau</span></button></div></div>`;
+  }
+  if (f.type === 'voice') {
+    const sc = curScene(), vo = v && ed.assets.voices?.[v], job = sc.props.voiceJob;
+    const chars = (sc.props.script || '').length;
+    return `<div class="field"><span>${esc(f.label)}</span><div class="voice-box">
+      ${job ? '<div class="job"><span class="spinner"></span><span id="voiceJobStatus">Génération de la voix…</span></div>'
+        : v ? `<div class="row"><button class="icon-btn" data-ed="playVoice" aria-label="Écouter la voix">${ic('play')}</button><span style="flex:1;font-weight:700">Voix prête${vo ? `, ${vo.duration.toFixed(1).replace('.', ',')} s` : ''}</span><button class="btn ghost" data-ed="removeVoice">Retirer</button></div>`
+        : '<p class="hint" style="color:var(--stage-muted)">Sans voix, l’avatar mime la parole pendant que les sous-titres défilent. Ajoute une voix pour qu’il parle vraiment.</p>'}
+      <div class="row" style="flex-wrap:wrap"><button class="btn" data-ed="recordVoice">${ic('mic')}Enregistrer</button><button class="btn" data-ed="uploadVoice">${ic('upload')}Importer</button></div>
+      <div class="row"><select data-tts-voice aria-label="Voix IA" style="flex:1">${Object.entries(TTS_VOICES).map(([g, l]) => `<optgroup label="${g}">${l.map((n) => `<option ${(sc.props.ttsVoice || 'Aria') === n ? 'selected' : ''}>${n}</option>`).join('')}</optgroup>`).join('')}</select>
+        <button class="btn" data-ed="ttsVoice" ${state.ai.configured && !job && chars ? '' : 'disabled'}>${ic('spark')}Voix IA</button></div>
+      <span class="hint" style="color:var(--stage-muted)">${state.ai.configured ? `Lit le texte prononcé avec une voix naturelle, environ ${fmtUsd(Math.max(0.01, (chars / 1000) * 0.1))}.` : 'Voix IA : ajoute une clé fal.ai dans Réglages.'}</span>
+    </div></div>`;
+  }
   if (f.type === 'text') return `<label class="field"><span>${esc(f.label)}</span><input data-k="${f.k}" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}"></label>`;
   if (f.type === 'textarea') return `<label class="field"><span>${esc(f.label)}</span><textarea data-k="${f.k}" rows="${f.rows || 2}" placeholder="${esc(f.placeholder || '')}">${esc(v ?? '')}</textarea></label>`;
   if (f.type === 'toggle') return `<label class="switch"><input type="checkbox" data-k="${f.k}" ${v ? 'checked' : ''}>${esc(f.label)}</label>`;
@@ -858,6 +1112,29 @@ function fieldHtml(f, props) {
       ${items.length < f.max ? `<button class="btn ghost" data-ed="addItem" data-k="${f.k}" style="justify-self:start">${ic('plus')}${esc(f.add)}</button>` : ''}</div></div>`;
   }
   return '';
+}
+function aiVideoSection(s) {
+  const p = s.props;
+  if (s.type !== 'presentateur' || p.avatar?.kind !== 'photo') return '';
+  const vo = p.voice && ed.assets.voices?.[p.voice];
+  const model = p.model || 'avatar-standard', rate = model === 'avatar-pro' ? 0.115 : 0.0562;
+  const ready = p.video && p.videoKey === videoKey(p);
+  let body;
+  if (p.videoJob) body = '<div class="job"><span class="spinner"></span><span id="videoJobStatus">Génération en file d’attente…</span></div><p class="hint" style="color:var(--stage-muted)">Compte souvent 3 à 10 minutes. Tu peux continuer à travailler, ou fermer la vidéo et revenir plus tard.</p>';
+  else if (!p.voice) body = '<p class="hint" style="color:var(--stage-muted)">Ajoute d’abord une voix : l’IA anime la photo sur cette voix.</p>';
+  else body = `${ready ? `<div class="job ok">${ic('check')}Vidéo réaliste prête</div>` : ''}
+    <label class="field"><span>Qualité</span><select data-k="model"><option value="avatar-standard" ${model === 'avatar-standard' ? 'selected' : ''}>Standard, environ 0,056 $ par seconde</option><option value="avatar-pro" ${model === 'avatar-pro' ? 'selected' : ''}>Pro 1080p, environ 0,115 $ par seconde</option></select></label>
+    <button class="btn ${ready ? '' : 'primary'}" data-ed="genVideo" ${state.ai.configured && vo ? '' : 'disabled'} style="justify-self:start">${ic('spark')}${ready ? 'Régénérer' : 'Générer la vidéo réaliste'}${vo ? `, environ ${fmtUsd(vo.duration * rate)}` : ''}</button>
+    ${state.ai.configured ? '' : '<span class="hint" style="color:var(--stage-muted)">Ajoute une clé fal.ai dans Réglages pour générer.</span>'}`;
+  return `<div class="insp-sec"><div class="label">Vidéo IA de l’avatar</div>${body}</div>`;
+}
+function hydrateInspector() {
+  const brand = ed.brand;
+  $$('#inspector canvas[data-av]').forEach((c) => {
+    const a = state.avatars.find((x) => x.id === c.dataset.av);
+    c.width = 120; c.height = 120; drawAvatarThumb(c, a ? avatarData(a) : null, brand);
+  });
+  $$('#inspector img[data-media]').forEach(async (img) => { try { img.src = await mediaSrc(img.dataset.media); } catch { /* rien */ } });
 }
 function videoPanel() {
   const p = P(), c = clientById(p.clientId);
@@ -1009,11 +1286,47 @@ function onEdClick(e) {
   else if (a === 'delItem' && s) { beforeChange(); s.props[b.dataset.k].splice(+b.dataset.i, 1); changed({ clip: ed.sel, inspector: true }); }
   else if (a === 'pickImage') { ed.imgKey = b.dataset.k; $('#imgFile').click(); }
   else if (a === 'removeImage' && s) { beforeChange(); s.props[b.dataset.k] = ''; changed({ clip: ed.sel, inspector: true }); }
+  else if (a === 'pickAvatar' && s) {
+    const av = b.dataset.id ? avatarData(state.avatars.find((x) => x.id === b.dataset.id)) : null;
+    if ((s.props.avatar?.id || null) === (av?.id || null)) return;
+    beforeChange(); s.props.avatar = av;
+    if (s.props.video && s.props.videoKey !== videoKey(s.props)) { s.props.video = ''; toast('La vidéo IA a été retirée : l’avatar a changé.'); }
+    reloadAssets().then(() => changed({ clip: ed.sel, inspector: true }));
+  }
+  else if (a === 'newAvatar') {
+    const onSaved = (av) => { if (!av || !ed) return; beforeChange(); curScene().props.avatar = avatarData(av); reloadAssets().then(() => changed({ clip: ed.sel, inspector: true })); };
+    openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Nouvel avatar</h2><p>Quel type de présentateur ?</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+      <div class="source-row"><button class="source-btn" data-kind="illustre">${ic('avatars')}Présentateur illustré<span>Gratuit, animé par Cadence, à tes couleurs</span></button>
+      <button class="source-btn" data-kind="photo">${ic('spark')}Avatar photo réaliste<span>Une vraie personne qui parle, générée par IA</span></button></div></div>`, {
+      onMount: (m) => $$('[data-kind]', m).forEach((x) => x.addEventListener('click', () => (x.dataset.kind === 'photo' ? photoAvatarDialog(null, onSaved) : illustratedDialog(null, onSaved)))),
+    });
+  }
+  else if (a === 'recordVoice' && s) { const sid = s.id; recordDialog(s.props.script).then(async (wav) => { if (wav) await storeVoice(sid, wav, 'voix-enregistree'); }); }
+  else if (a === 'uploadVoice' && s) {
+    const sid = s.id, inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'audio/*';
+    inp.onchange = async () => { const f = inp.files[0]; if (!f) return; try { toast('Préparation de l’audio…'); await storeVoice(sid, await toWav(f), f.name); } catch { toast('Fichier audio illisible.', 'error'); } };
+    inp.click();
+  }
+  else if (a === 'removeVoice' && s) { beforeChange(); s.props.voice = ''; s.props.video = ''; reloadAssets().then(() => changed({ clip: ed.sel, inspector: true })); }
+  else if (a === 'playVoice' && s) {
+    const vo = ed.assets.voices?.[s.props.voice]; if (!vo) return;
+    if (!vo.el.paused) { vo.el.pause(); b.innerHTML = ic('play'); return; }
+    setPlaying(false); vo.el.currentTime = 0; vo.el.play(); b.innerHTML = ic('pause');
+    vo.el.onended = () => { b.innerHTML = ic('play'); };
+  }
+  else if (a === 'ttsVoice' && s) startJob(s, 'voiceJob', { model: 'tts', text: s.props.script, voice: s.props.ttsVoice || 'Aria' });
+  else if (a === 'genVideo' && s) {
+    const vo = ed.assets.voices?.[s.props.voice]; if (!vo) return;
+    const model = s.props.model || 'avatar-standard', cost = vo.duration * (model === 'avatar-pro' ? 0.115 : 0.0562);
+    confirmBox({ title: 'Générer la vidéo réaliste ?', text: `La photo de ${s.props.avatar?.name || 'l’avatar'} va être animée sur ${vo.duration.toFixed(1).replace('.', ',')} s de voix. Coût estimé : ${fmtUsd(cost)}, facturé par fal.ai.`, ok: `Générer pour ${fmtUsd(cost)}` })
+      .then((ok) => { if (ok) startJob(s, 'videoJob', { model, imageMedia: s.props.avatar.photo, audioMedia: s.props.voice, duration: vo.duration, key: videoKey(s.props) }); });
+  }
   else if (a === 'editBrand') brandDialog(P().clientId);
   else if (a === 'newBrand') brandDialog();
 }
 function onInspector(e) {
   const el = e.target, s = curScene();
+  if (el.dataset.ttsVoice !== undefined) { if (s) { s.props.ttsVoice = el.value; changed(); } return; }
   if (el.dataset.video) { beforeChange(); P().data[el.dataset.video] = el.checked; changed(); return; }
   if (!s) return;
   if (el.dataset.k && el.type !== 'file') {
@@ -1065,6 +1378,105 @@ function onEdKey(e) {
   else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); setPlaying(false); seek(ed.time + (e.key === 'ArrowRight' ? 1 : -1) * (e.shiftKey ? 1 : 1 / 30)); }
   else if (e.key === 'Home') { seek(0); }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement?.closest('.film')) { e.preventDefault(); $('[data-ed="delScene"]')?.click(); }
+}
+
+/* ---------- Voix et tâches d'IA ---------- */
+const sceneById = (id) => scenesOf().find((x) => x.id === id);
+async function storeVoice(sceneId, wav, name) {
+  try {
+    const id = await uploadMedia(wav, 'audio', name);
+    if (!ed) return;
+    const sc = sceneById(sceneId); if (!sc) return;
+    await applyVoice(sc, id);
+    toast('Voix ajoutée', 'ok');
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function applyVoice(sc, mediaId) {
+  beforeChange();
+  sc.props.voice = mediaId; delete sc.props.voiceJob;
+  if (sc.props.video) { sc.props.video = ''; toast('La vidéo IA a été retirée : la voix a changé.'); }
+  await reloadAssets();
+  if (!ed) return;
+  const vo = ed.assets.voices?.[mediaId];
+  if (vo) sc.duration = clamp(Math.ceil((vo.duration + V.VOICE_DELAY + 0.9) * 2) / 2, 2, 60);
+  changed({ film: true, inspector: true, scrub: true });
+}
+async function startJob(sc, field, body) {
+  try {
+    const r = await api('/api/ai/jobs', { method: 'POST', body });
+    beforeChange(); sc.props[field] = r.id; changed({ inspector: true });
+    toast(field === 'voiceJob' ? 'Génération de la voix lancée' : 'Génération de la vidéo lancée. Ça peut prendre plusieurs minutes.', 'ok');
+    ed.save.flush();
+  } catch (e) { toast(e.message, 'error'); }
+}
+let polling = false;
+async function pollJobs() {
+  if (!ed || polling) return;
+  const pending = scenesOf().flatMap((sc) => ['voiceJob', 'videoJob'].filter((f) => sc.props?.[f]).map((f) => ({ sc, f, id: sc.props[f] })));
+  if (!pending.length) return;
+  polling = true;
+  try {
+    for (const { sc, f, id } of pending) {
+      let j; try { j = await api(`/api/ai/jobs/${id}`); } catch { continue; }
+      if (!ed) return;
+      const label = j.status === 'running' ? 'Génération en cours…' : `En file d’attente${j.queuePosition ? `, position ${j.queuePosition}` : ''}…`;
+      const st = $(f === 'voiceJob' ? '#voiceJobStatus' : '#videoJobStatus'); if (st) st.textContent = `${label} (${fmtDur((Date.now() - j.createdAt) / 1000)})`;
+      if (j.status === 'done' && j.media) {
+        if (f === 'voiceJob') { await applyVoice(sc, j.media); toast('Voix IA prête', 'ok'); }
+        else {
+          beforeChange(); sc.props.video = j.media; sc.props.videoKey = j.meta?.key || videoKey(sc.props); delete sc.props.videoJob;
+          await reloadAssets(); changed({ clip: scenesOf().indexOf(sc), inspector: true });
+          toast('Vidéo de l’avatar prête', 'ok');
+        }
+        loadAll().catch(() => {});
+      } else if (j.status === 'error') {
+        beforeChange(); delete sc.props[f]; changed({ inspector: true });
+        toast(`Génération échouée : ${j.error || 'erreur inconnue'}`, 'error');
+      }
+    }
+  } finally { polling = false; }
+}
+function recordDialog(script) {
+  return new Promise((resolve) => {
+    let rec = null, stream = null, ac = null, raf = 0, timer = 0, t0 = 0, take = null, result = null;
+    const cleanup = () => { cancelAnimationFrame(raf); clearInterval(timer); try { rec?.state === 'recording' && rec.stop(); } catch { /* rien */ } stream?.getTracks().forEach((t) => t.stop()); ac?.close().catch(() => {}); stream = null; };
+    openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Enregistrer la voix</h2><p>Parle naturellement, à environ 20 cm du micro. Les silences au début et à la fin sont coupés automatiquement.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+      ${script ? `<div class="script-box"><span class="label">À lire</span><p>${esc(script)}</p></div>` : ''}
+      <div class="rec-panel"><span class="rec-time" id="recTime">00:00</span><div class="progress" style="flex:1"><i id="recLevel" style="background:var(--ok);transition:width .05s"></i></div></div>
+      <audio id="recAudio" controls hidden style="width:100%"></audio>
+      <p class="form-error" id="recErr"></p>
+      <div class="dlg-foot"><button class="btn" data-close>Annuler</button><button class="btn rec" id="recBtn">${ic('rec')}Démarrer</button><button class="btn primary" id="recUse" hidden>${ic('check')}Utiliser cette prise</button></div></div>`, {
+      size: 'mid',
+      onClose: () => { cleanup(); resolve(result); },
+      onMount: (m) => {
+        const btn = $('#recBtn', m);
+        btn.addEventListener('click', async () => {
+          if (rec?.state === 'recording') { rec.stop(); return; }
+          $('#recErr', m).textContent = '';
+          try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+          catch { $('#recErr', m).textContent = 'Accès au micro refusé. Autorise-le dans la barre d’adresse puis réessaie.'; return; }
+          ac = new AudioContext(); const an = ac.createAnalyser(); an.fftSize = 512; ac.createMediaStreamSource(stream).connect(an);
+          const buf = new Uint8Array(an.fftSize);
+          const meter = () => { an.getByteTimeDomainData(buf); let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v - 128)); $('#recLevel', m).style.width = `${Math.min(100, (pk / 128) * 160)}%`; raf = requestAnimationFrame(meter); };
+          meter();
+          const chunks = [];
+          rec = new MediaRecorder(stream);
+          rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+          rec.onstop = async () => {
+            cleanup(); btn.innerHTML = `${ic('rec')}Recommencer`; $('#recLevel', m).style.width = '0';
+            try {
+              take = await toWav(new Blob(chunks, { type: rec.mimeType || 'audio/webm' }));
+              const au = $('#recAudio', m); au.src = URL.createObjectURL(take); au.hidden = false; $('#recUse', m).hidden = false;
+            } catch { $('#recErr', m).textContent = 'Enregistrement vide ou illisible. Réessaie.'; }
+          };
+          rec.start(); t0 = Date.now();
+          btn.innerHTML = `${ic('stop')}Arrêter`; $('#recUse', m).hidden = true; $('#recAudio', m).hidden = true;
+          timer = setInterval(() => { const sec = Math.floor((Date.now() - t0) / 1000); $('#recTime', m).textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`; if (sec >= 180) rec.stop(); }, 250);
+        });
+        $('#recUse', m).addEventListener('click', () => { result = take; closeModal(); });
+      },
+    });
+  });
 }
 
 /* ---------- Ajout de scène ---------- */
@@ -1145,7 +1557,8 @@ async function runExport({ formats, quality, fps, music, volume }) {
   $('#exCancel').addEventListener('click', () => ctl.abort());
   const pc = $('#exCanvas');
   try {
-    const assets = await V.prepareAssets(p.data, ed.brand);
+    $('#exInfo').textContent = 'Chargement des voix et vidéos…';
+    const assets = await V.prepareAssets(p.data, ed.brand, { media: fetchMedia });
     for (let i = 0; i < formats.length; i++) {
       const fmt = formats[i], size = V.exportSize(fmt, quality);
       $('#exSub').textContent = `${formats.length > 1 ? `Fichier ${i + 1} sur ${formats.length}, ` : ''}${fmt}, ${size.w}×${size.h}, ${fps} images par seconde`;
@@ -1161,7 +1574,8 @@ async function runExport({ formats, quality, fps, music, volume }) {
           if (pr.phase === 'video') {
             $('#exInfo').textContent = `Image ${pr.frame} sur ${pr.frames}${pr.eta ? `, environ ${fmtDur(pr.eta)} restantes` : ''}`;
             if (pr.canvas) pc.getContext('2d').drawImage(pr.canvas, 0, 0, pc.width, pc.height);
-          } else if (pr.phase === 'audio') $('#exInfo').textContent = 'Ajout de la musique…';
+          } else if (pr.phase === 'audio') $('#exInfo').textContent = 'Encodage du son…';
+          else if (pr.phase === 'prepare') $('#exInfo').textContent = 'Mixage des voix et de la musique…';
         },
       });
       const name = `${slug(c?.name || 'cadence')}-${slug(p.name)}-${fmt.replace(':', 'x')}-${Math.min(res.width, res.height)}p.mp4`;

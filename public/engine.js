@@ -3,6 +3,9 @@
  * l'aperçu et l'export produisent exactement la même chose.
  */
 import { Muxer, ArrayBufferTarget } from './vendor/mp4-muxer.mjs';
+import { drawCharacter, synthTalk, DEFAULT_CHAR } from './avatar.js';
+export { DEFAULT_CHAR };
+export const VOICE_DELAY = 0.5;
 
 /* ---------------------------------------------------------------
    Formats, polices, ambiances
@@ -261,6 +264,35 @@ function paintBackground(S) {
 const pad = (S) => Math.round(Math.min(S.W, S.H) * (S.portrait ? 0.085 : 0.1));
 const num = (v) => { const m = String(v ?? '').match(/^([^\d-]*)(-?[\d\s.,  ]*\d)(.*)$/); if (!m) return null; const raw = m[2].replace(/[\s  ]/g, ''); const dec = (raw.split(/[.,]/)[1] || '').length; return { pre: m[1], val: parseFloat(raw.replace(',', '.')) || 0, dec, suf: m[3] }; };
 const fmtNum = (n, dec) => n.toLocaleString('fr-FR', { minimumFractionDigits: dec, maximumFractionDigits: dec }).replace(/[  ]/g, ' ');
+
+/* --- Outils du présentateur --- */
+function envAt(v, lt) {
+  if (!v?.env || lt < 0) return 0;
+  const i = lt * v.rate, i0 = Math.floor(i);
+  if (i0 >= v.env.length - 1) return 0;
+  const f = i - i0; return v.env[i0] * (1 - f) + v.env[i0 + 1] * f;
+}
+function captionChunks(text) {
+  const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const out = []; let cur = [];
+  for (const w of words) { cur.push(w); if (cur.length >= 7 || (/[.!?;:,…]$/.test(w) && cur.length >= 3)) { out.push(cur.join(' ')); cur = []; } }
+  if (cur.length) out.push(cur.join(' '));
+  return out;
+}
+function activeCaption(text, lt, dur) {
+  const ch = captionChunks(text);
+  if (!ch.length || lt < 0 || lt > dur) return null;
+  const total = ch.reduce((a, c) => a + c.length + 8, 0); let acc = 0;
+  for (const c of ch) { const st = (acc / total) * dur; acc += c.length + 8; const en = (acc / total) * dur; if (lt >= st && lt < en) return { text: c, st, en }; }
+  return null;
+}
+function coverDraw(ctx, src, x, y, w, h, ay = 0.35, zoom = 1) {
+  const sw = src.videoWidth || src.width, sh = src.videoHeight || src.height;
+  if (!sw || !sh) return false;
+  const k = Math.max(w / sw, h / sh) * zoom, dw = sw * k, dh = sh * k;
+  ctx.drawImage(src, x + (w - dw) / 2, y + (h - dh) * ay, dw, dh);
+  return true;
+}
 
 export const SCENES = {
   intro: {
@@ -618,6 +650,151 @@ export const SCENES = {
     },
   },
 
+  presentateur: {
+    label: 'Présentateur', hint: 'Un avatar qui parle, avec voix et sous-titres', bg: 'sombre', duration: 8,
+    fields: [
+      { k: 'avatar', type: 'avatar', label: 'Avatar' },
+      { k: 'script', type: 'textarea', label: 'Texte prononcé', rows: 4, placeholder: 'Ce que dit l’avatar. Sert aux sous-titres et à la voix IA.' },
+      { k: 'voice', type: 'voice', label: 'Voix' },
+      { k: 'layout', type: 'select', label: 'Mise en page', options: { cote: 'Avatar à côté du contenu', medaillon: 'Avatar en médaillon', plein: 'Avatar plein cadre' } },
+      { k: 'side', type: 'select', label: 'Côté de l’avatar', options: { gauche: 'Gauche', droite: 'Droite' } },
+      { k: 'title', type: 'textarea', label: 'Titre affiché', rows: 2 },
+      { k: 'items', type: 'items', label: 'Points affichés pendant qu’il parle', max: 4, add: 'Ajouter un point', item: [{ k: 'text', label: 'Texte', placeholder: 'Un argument clé' }] },
+      { k: 'captions', type: 'toggle', label: 'Sous-titres' },
+    ],
+    defaults: {
+      avatar: null, script: 'Bonjour ! En moins d’une minute, je vous montre comment nous pouvons vous aider à grandir.', voice: '', video: '', videoKey: '', model: 'avatar-standard',
+      layout: 'cote', side: 'gauche', title: 'Ce que nous vous apportons',
+      items: [{ text: 'Un accompagnement sur mesure' }, { text: 'Des résultats mesurables' }, { text: 'Une équipe à votre écoute' }], captions: true,
+    },
+    draw(S) {
+      const { ctx, W, H, u, t, d, p, pal, b } = S;
+      const P = pad(S);
+      const av = p.avatar || { kind: 'illustre', config: DEFAULT_CHAR };
+      const voice = p.voice ? S.assets?.voices?.[p.voice] : null;
+      const lt = t - VOICE_DELAY;
+      const vdur = voice ? voice.duration : Math.max(1, d - VOICE_DELAY - 0.6);
+      const speaking = lt >= 0 && lt <= vdur;
+      const talk = voice ? envAt(voice, lt) : (p.script && speaking ? synthTalk(lt) : 0);
+      const act = voice ? (envAt(voice, lt - 0.4) + envAt(voice, lt) + envAt(voice, lt + 0.4)) / 3 : (speaking && p.script ? 0.55 : 0);
+      const gesture = speaking ? clamp(Math.sin(lt * 0.8 + 0.6) * 1.7 - 0.4) * clamp(act * 2) : 0;
+      const left = p.side !== 'droite';
+      const layout = p.layout || 'cote';
+      const enter = E.outBack(prog(t, 0.05, 0.85)), fade = prog(t, 0.05, 0.4);
+      const isPhoto = av.kind === 'photo';
+      const vid = p.video ? S.assets?.videos?.[p.video] : null;
+      const photo = isPhoto ? S.assets?.photos?.[av.photo] : null;
+      const anim = { t, talk, gesture, dir: left ? 1 : -1, outfit: b.colors.primary, accent: b.colors.secondary };
+
+      const realSrc = vid && vid.readyState >= 2 ? vid : photo;
+      const badge = (x, y) => {
+        if (!S.assets?.preview || !isPhoto || vid) return;
+        setFont(ctx, S.F.body, 700, 24 * u); setTrack(ctx, 0);
+        const txt = 'Aperçu : vidéo IA à générer', w = ctx.measureText(txt).width + 36 * u;
+        ctx.fillStyle = 'rgba(0,0,0,.65)'; rrect(ctx, x, y, w, 46 * u, 23 * u); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(txt, x + 18 * u, y + 31 * u);
+      };
+      const drawIllustrated = (cx, bottom, h) => {
+        const sc = h / 820;
+        const g = ctx.createRadialGradient(cx, bottom - 560 * sc, 0, cx, bottom - 560 * sc, 470 * sc);
+        g.addColorStop(0, rgba(pal.accent, 0.38 * fade)); g.addColorStop(1, rgba(pal.accent, 0));
+        ctx.fillStyle = g; ctx.fillRect(cx - 500 * sc, bottom - 1100 * sc, 1000 * sc, 1100 * sc);
+        drawCharacter(ctx, av.kind === 'illustre' ? av.config : DEFAULT_CHAR, cx, bottom + (1 - enter) * h * 0.4, sc, anim);
+      };
+      const drawInRect = (x, y, w, h, r) => {
+        ctx.save();
+        const sc = 0.92 + 0.08 * enter; ctx.globalAlpha *= fade;
+        ctx.translate(x + w / 2, y + h / 2); ctx.scale(sc, sc); ctx.translate(-(x + w / 2), -(y + h / 2));
+        ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 50 * u; ctx.shadowOffsetY = 20 * u;
+        ctx.fillStyle = mix(pal.base, pal.accent, 0.25); rrect(ctx, x, y, w, h, r); ctx.fill(); ctx.shadowColor = 'transparent';
+        rrect(ctx, x, y, w, h, r); ctx.clip();
+        if (realSrc) coverDraw(ctx, realSrc, x, y, w, h, 0.3, vid ? 1 : 1.03 + 0.02 * Math.sin(t * 0.6));
+        else drawIllustrated(x + w / 2, y + h, h * 0.92);
+        ctx.restore();
+        badge(x + 18 * u, y + 18 * u);
+      };
+      const drawInCircle = (cx, cy, r) => {
+        const pulse = r + 8 * u + talk * 12 * u;
+        ctx.save(); ctx.globalAlpha *= fade;
+        ctx.strokeStyle = rgba(pal.accent, 0.5); ctx.lineWidth = 5 * u; ctx.beginPath(); ctx.arc(cx, cy, pulse * enter, 0, 6.283); ctx.stroke();
+        ctx.fillStyle = mix(pal.base, pal.accent, 0.35); ctx.beginPath(); ctx.arc(cx, cy, r * enter, 0, 6.283); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, r * enter, 0, 6.283); ctx.clip();
+        if (realSrc) coverDraw(ctx, realSrc, cx - r, cy - r, r * 2, r * 2, 0.22);
+        else drawCharacter(ctx, av.kind === 'illustre' ? av.config : DEFAULT_CHAR, cx, cy + r * 1.05, (r * 2.15) / 820, anim);
+        ctx.restore();
+        badge(cx - r, cy - r - 60 * u);
+      };
+
+      let content = null;
+      if (layout === 'plein') {
+        if (isPhoto) {
+          ctx.save(); ctx.globalAlpha *= fade;
+          if (realSrc) coverDraw(ctx, realSrc, 0, 0, W, H, 0.3, vid ? 1 : 1.04 + 0.03 * clamp(t / d));
+          else drawIllustrated(W / 2, H, H * 0.86);
+          ctx.restore(); badge(P, P);
+          const g = ctx.createLinearGradient(0, 0, 0, H * 0.3); g.addColorStop(0, 'rgba(0,0,0,.5)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g; ctx.fillRect(0, 0, W, H * 0.3);
+        } else drawIllustrated(W / 2, H, H * (S.portrait ? 0.6 : 0.84));
+        if (p.title) kicker(S, p.title, P, P, { start: 0.4, color: isPhoto ? '#FFFFFF' : pal.accent });
+      } else if (layout === 'medaillon') {
+        const r = Math.min(W, H) * (S.portrait ? 0.25 : 0.2);
+        const cx = left ? P + r : W - P - r, cy = H - P - r;
+        drawInCircle(cx, cy, r);
+        content = S.portrait ? { x: P, y: P, w: W - P * 2, h: H - r * 2 - P * 3 } : { x: left ? P * 1.6 + r * 2 : P, y: P, w: W - P * 2.6 - r * 2, h: H - P * 2 };
+      } else if (S.portrait) {
+        const top = H * 0.47;
+        if (isPhoto) drawInRect(P * 0.7, top, W - P * 1.4, H - top - P * 0.7, 36 * u); else drawIllustrated(W / 2, H, (H - top) * 0.98);
+        content = { x: P, y: P, w: W - P * 2, h: top - P * 1.3 };
+      } else {
+        const half = W * 0.47;
+        const ax = left ? 0 : W - half;
+        if (isPhoto) drawInRect(ax + P * 0.7, P * 0.7, half - P * 1.1, H - P * 1.4, 36 * u);
+        else drawIllustrated(ax + half / 2, H, H * 0.9);
+        content = { x: left ? half + P * 0.5 : P, y: P, w: W - half - P * 1.5, h: H - P * 2 };
+      }
+
+      if (content) {
+        const T = p.title ? fit(S, p.title, { size: (S.portrait ? 92 : 84) * u, maxW: content.w, maxLines: 3 }) : null;
+        const items = (p.items || []).filter((i) => i.text).slice(0, 4);
+        const rows = items.map((it) => fit(S, it.text, { display: false, size: (S.portrait ? 46 : 42) * u, maxW: content.w - 48 * u, maxLines: 2 }));
+        const th = T ? T.lines.length * T.size * 1.08 : 0;
+        const rh = rows.reduce((a, R) => a + R.lines.length * R.size * 1.3 + 26 * u, 0);
+        let y = content.y + Math.max(0, (content.h - th - (rows.length ? 50 * u + rh : 0)) / 2);
+        if (T) y += revealLines(S, T, content.x, y, { start: 0.35, color: pal.fg }) + 50 * u;
+        rows.forEach((R, i) => {
+          const st = VOICE_DELAY + 0.3 + (vdur * 0.8 * i) / Math.max(1, rows.length);
+          const q = E.outExpo(prog(t, st, 0.7));
+          if (q > 0) {
+            ctx.save(); ctx.globalAlpha *= clamp(q * 1.5); ctx.translate((1 - q) * 40 * u, 0);
+            ctx.fillStyle = pal.accent; rrect(ctx, content.x, y + R.size * 0.32, 18 * u, 18 * u, 5 * u); ctx.fill();
+            useFit(S, R); ctx.fillStyle = pal.fg; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+            R.lines.forEach((l, j) => ctx.fillText(l, content.x + 48 * u, y + R.size * 0.95 + j * R.size * 1.3));
+            ctx.restore();
+          }
+          y += R.lines.length * R.size * 1.3 + 26 * u;
+        });
+      }
+
+      if (p.captions && p.script) {
+        const c = activeCaption(p.script, lt, vdur);
+        if (c) {
+          const C = fit(S, c.text, { display: false, size: (S.portrait ? 50 : 42) * u, maxW: Math.min(W * 0.78, 1400 * u), maxLines: 2 });
+          setFont(ctx, C.family, 700, C.size); setTrack(ctx, 0);
+          const lw = Math.max(...C.lines.map((l) => ctx.measureText(l).width));
+          const bw = lw + 60 * u, bh = C.lines.length * C.size * 1.3 + 32 * u;
+          const bx = (W - bw) / 2, by = H - P * (S.portrait ? 1.6 : 0.75) - bh;
+          const q = E.outCubic(prog(lt, c.st, 0.18));
+          ctx.save(); ctx.globalAlpha *= q; ctx.translate(0, (1 - q) * 10 * u);
+          ctx.fillStyle = 'rgba(0,0,0,.68)'; rrect(ctx, bx, by, bw, bh, 16 * u); ctx.fill();
+          ctx.fillStyle = pal.accent; ctx.fillRect(bx + 16 * u, by + bh - 6 * u, (bw - 32 * u) * clamp((lt - c.st) / (c.en - c.st)), 3 * u);
+          ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+          C.lines.forEach((l, j) => ctx.fillText(l, W / 2, by + 16 * u + C.size * 0.98 + j * C.size * 1.3));
+          ctx.restore();
+        }
+      }
+    },
+  },
+
   final: {
     label: 'Appel à l’action', hint: 'Conclusion avec bouton et site', bg: 'principale', duration: 5,
     fields: [
@@ -716,6 +893,16 @@ export const TEMPLATES = {
       sc('graphique', {}, { transition: 'volet' }),
       sc('chiffres', { title: 'Les temps forts' }, { transition: 'glisse' }),
       sc('final', { title: 'Merci pour votre confiance', button: 'Voir le rapport complet' }, { transition: 'fondu' }),
+    ],
+  },
+  presentation: {
+    label: 'Présentation avec avatar', hint: 'Un présentateur qui parle à vos clients',
+    scenes: () => [
+      sc('intro', { kicker: 'Présentation', title: 'Découvrez ce que nous faisons pour vous', subtitle: '' }),
+      sc('presentateur', {}, { transition: 'volet', duration: 9 }),
+      sc('chiffres', {}, { transition: 'glisse' }),
+      sc('presentateur', { layout: 'medaillon', side: 'droite', script: 'Et le plus simple, c’est d’en parler ensemble. Je vous attends.', title: 'Prenons rendez-vous', items: [{ text: '30 minutes, sans engagement' }, { text: 'Un plan d’action concret' }] }, { transition: 'zoom', duration: 6 }),
+      sc('final', { title: 'Parlons de votre projet', button: 'Prendre rendez-vous' }, { transition: 'fondu' }),
     ],
   },
   vierge: {
@@ -848,13 +1035,120 @@ export async function loadBitmap(src) {
   if (bitmapCache.size > 60) bitmapCache.delete(bitmapCache.keys().next().value);
   return pr;
 }
-export async function prepareAssets(project, brand) {
+const mediaCache = new Map();
+const cachedMedia = (key, fn) => {
+  if (!mediaCache.has(key)) mediaCache.set(key, fn().catch((e) => { mediaCache.delete(key); console.warn('Média illisible', key, e); return null; }));
+  return mediaCache.get(key);
+};
+let decodeCtx = null;
+async function decodeAudio(ab) { decodeCtx ||= new (window.AudioContext || window.webkitAudioContext)(); return decodeCtx.decodeAudioData(ab); }
+/** Enveloppe d'intensité de la voix, 100 valeurs par seconde, normalisée entre 0 et 1. */
+function envelope(buf) {
+  const rate = 100, hop = Math.floor(buf.sampleRate / rate), n = Math.floor(buf.length / hop);
+  const ch = [buf.getChannelData(0), buf.numberOfChannels > 1 ? buf.getChannelData(1) : null];
+  const raw = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let j = i * hop; j < (i + 1) * hop; j += 2) { const v = ch[1] ? (ch[0][j] + ch[1][j]) / 2 : ch[0][j]; sum += v * v; }
+    raw[i] = Math.sqrt(sum / (hop / 2));
+  }
+  const sorted = Float32Array.from(raw).sort();
+  const ref = sorted[Math.floor(sorted.length * 0.95)] || 1;
+  const out = new Float32Array(n); let prev = 0;
+  for (let i = 0; i < n; i++) {
+    let e = clamp(raw[i] / ref); if (e < 0.12) e = 0;
+    prev = e > prev ? prev + (e - prev) * 0.65 : prev + (e - prev) * 0.28;
+    out[i] = prev;
+  }
+  return { env: out, rate };
+}
+export function loadVoice(id, loader) {
+  return cachedMedia(`voice:${id}`, async () => {
+    const blob = await loader(id);
+    const buffer = await decodeAudio(await blob.arrayBuffer());
+    const el = new Audio(URL.createObjectURL(blob)); el.preload = 'auto';
+    return { id, buffer, duration: buffer.duration, ...envelope(buffer), el };
+  });
+}
+function loadPhoto(id, loader) { return cachedMedia(`photo:${id}`, async () => createImageBitmap(await loader(id))); }
+function loadVideo(id, loader) {
+  return cachedMedia(`video:${id}`, async () => {
+    const blob = await loader(id);
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(blob);
+    await new Promise((res, rej) => { const to = setTimeout(() => rej(new Error('Vidéo trop longue à charger')), 20000); v.addEventListener('loadeddata', () => { clearTimeout(to); res(); }, { once: true }); v.addEventListener('error', () => { clearTimeout(to); rej(new Error('Vidéo illisible')); }, { once: true }); });
+    return v;
+  });
+}
+/** opts : { media(id) → Promise<Blob>, preview: booléen } */
+export async function prepareAssets(project, brand, opts = {}) {
   const B = normBrand(brand);
   await ensureFonts(B);
   const images = {};
   const lib = project.assets || {};
   await Promise.all(Object.entries(lib).map(async ([id, src]) => { images[id] = await loadBitmap(src); }));
-  return { logo: await loadBitmap(B.logo), images };
+  const res = { logo: await loadBitmap(B.logo), images, voices: {}, photos: {}, videos: {}, preview: !!opts.preview };
+  if (opts.media) {
+    const tasks = [];
+    for (const s of project.scenes || []) {
+      if (s.type !== 'presentateur') continue;
+      const p = s.props || {};
+      if (p.voice) tasks.push(loadVoice(p.voice, opts.media).then((v) => { if (v) res.voices[p.voice] = v; }));
+      if (p.avatar?.kind === 'photo' && p.avatar.photo) tasks.push(loadPhoto(p.avatar.photo, opts.media).then((b) => { if (b) res.photos[p.avatar.photo] = b; }));
+      if (p.video) tasks.push(loadVideo(p.video, opts.media).then((v) => { if (v) res.videos[p.video] = v; }));
+    }
+    await Promise.all(tasks);
+  }
+  return res;
+}
+
+/** Cale les vidéos d'avatar sur l'image exacte à exporter. */
+export async function seekVideos(project, assets, time, fps = 30) {
+  if (!assets?.videos || !Object.keys(assets.videos).length) return;
+  const jobs = [];
+  for (const it of timeline(project).items) {
+    if (time < it.start || time >= it.end) continue;
+    const v = it.scene.props?.video && assets.videos[it.scene.props.video];
+    if (!v) continue;
+    const target = clamp(time - it.start - VOICE_DELAY, 0, Math.max(0, (v.duration || 0) - 0.04));
+    if (Math.abs(v.currentTime - target) < 0.4 / fps && !v.seeking) continue;
+    jobs.push(new Promise((res) => {
+      const done = () => { clearTimeout(to); res(); };
+      const to = setTimeout(done, 3000);
+      v.addEventListener('seeked', () => (v.requestVideoFrameCallback ? v.requestVideoFrameCallback(done) : done()), { once: true });
+      v.currentTime = target;
+    }));
+  }
+  await Promise.all(jobs);
+}
+/** Lecture de l'aperçu : voix et vidéos d'avatar synchronisées sur la tête de lecture. */
+export function syncPreview(project, assets, time, playing, onSeeked) {
+  if (!assets) return;
+  const actV = new Set(), actA = new Set();
+  for (const it of timeline(project).items) {
+    if (it.scene.type !== 'presentateur') continue;
+    const p = it.scene.props || {}, lt = time - it.start - VOICE_DELAY, inScene = time >= it.start && time < it.end;
+    const v = p.video && assets.videos?.[p.video];
+    if (v && inScene) {
+      actV.add(v);
+      const target = clamp(lt, 0, Math.max(0, (v.duration || 0) - 0.04));
+      if (playing && lt >= 0 && lt < v.duration) {
+        if (v.paused) { v.currentTime = target; v.play().catch(() => {}); } else if (Math.abs(v.currentTime - target) > 0.25) v.currentTime = target;
+      } else {
+        if (!v.paused) v.pause();
+        if (Math.abs(v.currentTime - target) > 0.03 && !v.seeking) { v.addEventListener('seeked', onSeeked, { once: true }); v.currentTime = target; }
+      }
+    }
+    const vo = p.voice && assets.voices?.[p.voice];
+    if (vo && inScene) {
+      actA.add(vo.el);
+      if (playing && lt >= 0 && lt < vo.duration) {
+        if (vo.el.paused) { vo.el.currentTime = lt; vo.el.play().catch(() => {}); } else if (Math.abs(vo.el.currentTime - lt) > 0.3) vo.el.currentTime = lt;
+      } else if (!vo.el.paused) vo.el.pause();
+    }
+  }
+  for (const v of Object.values(assets.videos || {})) if (!actV.has(v) && !v.paused) v.pause();
+  for (const vo of Object.values(assets.voices || {})) if (!actA.has(vo.el) && !vo.el.paused) vo.el.pause();
 }
 
 /* ---------------------------------------------------------------
@@ -890,17 +1184,24 @@ async function pickAudioConfig(sampleRate) {
   }
   return null;
 }
-async function renderMusic(file, total, volume = 0.8) {
+/** Mixe la musique et les voix ; la musique baisse automatiquement quand quelqu'un parle. */
+async function mixAudio({ music, volume = 0.8, voices, total }) {
   const sr = 48000;
-  const ac = new (window.AudioContext || window.webkitAudioContext)();
-  const decoded = await ac.decodeAudioData(await file.arrayBuffer());
-  ac.close();
   const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr);
-  const src = off.createBufferSource(); src.buffer = decoded; src.loop = decoded.duration < total;
-  const g = off.createGain();
-  g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(volume, Math.min(0.6, total / 4));
-  g.gain.setValueAtTime(volume, Math.max(0.6, total - 1.8)); g.gain.linearRampToValueAtTime(0, total);
-  src.connect(g); g.connect(off.destination); src.start(0);
+  const vs = [...voices].sort((x, y) => x.at - y.at);
+  if (music) {
+    const decoded = await decodeAudio(await music.arrayBuffer());
+    const src = off.createBufferSource(); src.buffer = decoded; src.loop = decoded.duration < total;
+    const g = off.createGain(); const duck = volume * 0.25;
+    let level = 0, last = 0;
+    const hold = (time) => { time = Math.max(time, last); g.gain.setValueAtTime(level, time); last = time; };
+    const ramp = (time, v) => { time = Math.max(time, last + 0.01); g.gain.linearRampToValueAtTime(v, time); last = time; level = v; };
+    g.gain.setValueAtTime(0, 0); ramp(Math.min(0.6, total / 4), volume);
+    for (const v of vs) { hold(v.at - 0.35); ramp(v.at, duck); hold(v.end); ramp(v.end + 0.45, volume); }
+    hold(total - 1.8); ramp(total, 0);
+    src.connect(g); g.connect(off.destination); src.start(0);
+  }
+  for (const v of vs) { const src = off.createBufferSource(); src.buffer = v.buffer; src.connect(off.destination); src.start(Math.max(0, v.at)); }
   return off.startRendering();
 }
 
@@ -916,8 +1217,12 @@ export async function exportVideo(opts) {
   const frames = Math.max(1, Math.round(total * fps));
   const video = await pickVideoConfig(w, h, fps);
   let audioBuf = null, audio = null;
-  if (music) {
-    audioBuf = await renderMusic(music, frames / fps, volume);
+  const voices = timeline(project).items
+    .filter((it) => it.scene.type === 'presentateur' && it.scene.props?.voice && assets?.voices?.[it.scene.props.voice])
+    .map((it) => { const v = assets.voices[it.scene.props.voice]; const at = it.start + VOICE_DELAY; return { buffer: v.buffer, at, end: Math.min(it.end, at + v.duration) }; });
+  if (music || voices.length) {
+    onProgress?.({ phase: 'prepare', progress: 0 });
+    audioBuf = await mixAudio({ music, volume, voices, total: frames / fps });
     audio = await pickAudioConfig(audioBuf.sampleRate);
   }
   const target = new ArrayBufferTarget();
@@ -936,6 +1241,7 @@ export async function exportVideo(opts) {
   for (let f = 0; f < frames; f++) {
     if (signal?.aborted) { try { venc.close(); } catch { /* rien */ } throw new DOMException('Export annulé', 'AbortError'); }
     if (failure) throw failure;
+    await seekVideos(project, assets, f / fps, fps);
     renderFrame(ctx, w, h, project, B, assets, f / fps);
     const vf = new VideoFrame(canvas, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
     venc.encode(vf, { keyFrame: f % (fps * 2) === 0 });
@@ -951,6 +1257,7 @@ export async function exportVideo(opts) {
   if (failure) throw failure;
   if (audio) {
     onProgress?.({ phase: 'audio', progress: 0.96 });
+    if (!audio) throw new Error('Ce navigateur ne sait pas encoder l’audio.');
     const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: (e) => { failure = e; } });
     aenc.configure(audio.cfg);
     const sr = audioBuf.sampleRate, len = audioBuf.length, chunk = 4096;

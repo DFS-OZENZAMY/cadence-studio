@@ -15,6 +15,10 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, client_id TEXT, name TEXT NOT NULL, format TEXT NOT NULL, data TEXT NOT NULL, thumb TEXT, duration REAL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS projects_updated ON projects(updated_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, kind TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, chunks INTEGER NOT NULL, name TEXT, created_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS media_chunks (media_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (media_id, idx))`,
+  `CREATE TABLE IF NOT EXISTS avatars (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS ai_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, status_url TEXT, response_url TEXT, result_media TEXT, result_meta TEXT, cost REAL, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, project_id TEXT, project_name TEXT, client_id TEXT, format TEXT, quality TEXT, duration REAL, size INTEGER, created_at INTEGER NOT NULL)`,
 ];
 let ready = null;
@@ -78,6 +82,88 @@ function str(v, max, label) { const s = String(v ?? '').trim(); if (!s) throw ne
 function payload(v) { const s = JSON.stringify(v ?? {}); if (s.length > MAX_ROW) throw new HttpError('Projet trop volumineux (2 Mo maximum). Réduis la taille ou le nombre d’images.', 413); return s; }
 function thumbOk(t) { if (t == null) return null; if (typeof t !== 'string' || !t.startsWith('data:image/') || t.length > 200_000) throw new HttpError('Miniature invalide', 400); return t; }
 
+/* ---------- Médias (stockés en morceaux dans D1) ---------- */
+const CHUNK = 900_000;
+const MAX_MEDIA = 60_000_000;
+async function storeMedia(db, bytes, mime, kind, name = '') {
+  if (bytes.byteLength > MAX_MEDIA) throw new HttpError('Fichier trop volumineux (60 Mo maximum)', 413);
+  const id = uid(), u8 = new Uint8Array(bytes), n = Math.max(1, Math.ceil(u8.length / CHUNK));
+  const stmts = [db.prepare('INSERT INTO media (id, kind, mime, size, chunks, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, kind, mime, u8.length, n, String(name).slice(0, 120), Date.now())];
+  for (let i = 0; i < n; i++) stmts.push(db.prepare('INSERT INTO media_chunks (media_id, idx, data) VALUES (?, ?, ?)').bind(id, i, u8.subarray(i * CHUNK, (i + 1) * CHUNK)));
+  for (let i = 0; i < stmts.length; i += 20) await db.batch(stmts.slice(i, i + 20));
+  return { id, size: u8.length, mime, kind };
+}
+async function readMedia(db, id) {
+  const m = await db.prepare('SELECT * FROM media WHERE id = ?').bind(id).first();
+  if (!m) return null;
+  const out = new Uint8Array(m.size); let off = 0;
+  for (let i = 0; i < m.chunks; i++) {
+    const r = await db.prepare('SELECT data FROM media_chunks WHERE media_id = ? AND idx = ?').bind(id, i).first();
+    const part = r.data instanceof ArrayBuffer ? new Uint8Array(r.data) : new Uint8Array(r.data);
+    out.set(part, off); off += part.length;
+  }
+  return { meta: m, bytes: out };
+}
+async function hmacHex(secret, msg) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return hex(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(msg)));
+}
+async function mediaSecret(db) { let s = await setting(db, 'media_secret'); if (!s) { s = randomHex(32); await putSetting(db, 'media_secret', s); } return s; }
+/** URL publique temporaire (2 h) pour que le fournisseur d'IA puisse lire un fichier. */
+async function mediaUrl(db, origin, id) {
+  if (/\/\/(localhost|127\.0\.0\.1)/.test(origin)) {
+    const m = await readMedia(db, id); if (!m) throw new HttpError('Fichier introuvable', 404);
+    let s = ''; for (let i = 0; i < m.bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, m.bytes.subarray(i, i + 0x8000));
+    return `data:${m.meta.mime};base64,${btoa(s)}`;
+  }
+  const exp = Date.now() + 2 * 3600e3;
+  return `${origin}/api/media/${id}?exp=${exp}&sig=${await hmacHex(await mediaSecret(db), `${id}.${exp}`)}`;
+}
+
+/* ---------- Fournisseur d'IA : fal.ai ---------- */
+const AI_MODELS = {
+  'avatar-standard': { endpoint: 'fal-ai/kling-video/ai-avatar/v2/standard', perSecond: 0.0562, label: 'Kling Avatar v2 Standard' },
+  'avatar-pro': { endpoint: 'fal-ai/kling-video/ai-avatar/v2/pro', perSecond: 0.115, label: 'Kling Avatar v2 Pro' },
+  'tts': { endpoint: 'fal-ai/elevenlabs/tts/multilingual-v2', perKChar: 0.1, label: 'ElevenLabs Multilingual v2' },
+};
+async function falKey(env, db) { return env.FAL_KEY || (await setting(db, 'fal_key')) || null; }
+async function falFetch(key, url, init = {}) {
+  const r = await fetch(url, { ...init, headers: { authorization: `Key ${key}`, 'content-type': 'application/json', accept: 'application/json' } });
+  let d = null; try { d = await r.json(); } catch { /* rien */ }
+  if (!r.ok && r.status !== 202) {
+    const msg = typeof d?.detail === 'string' ? d.detail : Array.isArray(d?.detail) ? d.detail.map((x) => x.msg).join(', ') : d?.error || d?.message || `Erreur ${r.status}`;
+    throw new HttpError(`Fournisseur d’IA : ${msg}`, r.status === 401 || r.status === 403 ? 400 : 502);
+  }
+  return d;
+}
+async function advanceJob(env, db, job) {
+  if (job.status === 'done' || job.status === 'error') return job;
+  const key = await falKey(env, db);
+  const st = await falFetch(key, job.status_url);
+  const s = st?.status;
+  if (s === 'COMPLETED') {
+    let res;
+    try { res = await falFetch(key, job.response_url); }
+    catch (e) {
+      await db.prepare("UPDATE ai_jobs SET status = 'error', error = ?, updated_at = ? WHERE id = ?").bind(e.message, Date.now(), job.id).run();
+      return { ...job, status: 'error', error: e.message };
+    }
+    const file = job.kind === 'tts' ? res?.audio : res?.video;
+    if (!file?.url) throw new HttpError('Réponse du fournisseur sans fichier', 502);
+    const r = await fetch(file.url);
+    if (!r.ok) throw new HttpError('Téléchargement du résultat impossible', 502);
+    const bytes = await r.arrayBuffer();
+    const mime = r.headers.get('content-type')?.split(';')[0] || (job.kind === 'tts' ? 'audio/mpeg' : 'video/mp4');
+    const m = await storeMedia(db, bytes, mime, job.kind === 'tts' ? 'audio' : 'video', job.kind === 'tts' ? 'voix-ia' : 'avatar-ia');
+    await db.prepare("UPDATE ai_jobs SET status = 'done', result_media = ?, updated_at = ? WHERE id = ?").bind(m.id, Date.now(), job.id).run();
+    return { ...job, status: 'done', result_media: m.id };
+  }
+  const status = s === 'IN_PROGRESS' ? 'running' : 'queued';
+  if (status !== job.status) await db.prepare('UPDATE ai_jobs SET status = ?, updated_at = ? WHERE id = ?').bind(status, Date.now(), job.id).run();
+  return { ...job, status, queue_position: st?.queue_position };
+}
+const publicJob = (j) => ({ id: j.id, kind: j.kind, model: j.model, status: j.status, media: j.result_media, cost: j.cost, error: j.error, queuePosition: j.queue_position ?? null, meta: j.result_meta ? JSON.parse(j.result_meta) : null, createdAt: j.created_at });
+
 /* ---------- Routes ---------- */
 async function api(req, env, url) {
   const db = env.DB;
@@ -115,6 +201,17 @@ async function api(req, env, url) {
     const tok = cookie(req, COOKIE);
     if (tok) await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256(tok)).run();
     return json({ ok: true }, 200, { 'set-cookie': setCookie('x', 0) });
+  }
+
+  // --- Médias : lecture avec session ou avec une URL signée temporaire
+  let mm0 = path.match(/^\/api\/media\/([\w-]{8,64})$/);
+  if (mm0 && m === 'GET') {
+    const id = mm0[1], exp = +url.searchParams.get('exp'), sig = url.searchParams.get('sig') || '';
+    const signedOk = exp > Date.now() && safeEqual(sig, await hmacHex(await mediaSecret(db), `${id}.${exp}`));
+    if (!signedOk && !(await session(req, db))) return fail('Accès refusé', 401);
+    const md = await readMedia(db, id);
+    if (!md) return fail('Fichier introuvable', 404);
+    return new Response(md.bytes, { headers: { 'content-type': md.meta.mime, 'content-length': String(md.meta.size), 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
   }
 
   // --- Tout le reste exige une session
@@ -191,6 +288,97 @@ async function api(req, env, url) {
       return r.meta.changes ? json({ ok: true, updatedAt: now }) : fail('Projet introuvable', 404);
     }
     if (m === 'DELETE') { await db.prepare('DELETE FROM projects WHERE id = ?').bind(id).run(); return json({ ok: true }); }
+  }
+
+  // --- Médias : envoi et suppression
+  if (path === '/api/media' && m === 'POST') {
+    const kind = url.searchParams.get('kind');
+    if (!['audio', 'image', 'video'].includes(kind)) return fail('Type de fichier invalide');
+    const mime = (req.headers.get('content-type') || '').split(';')[0];
+    if (!mime.startsWith(`${kind}/`) && !(kind === 'audio' && mime === 'video/webm')) return fail('Format de fichier non pris en charge');
+    const bytes = await req.arrayBuffer();
+    if (!bytes.byteLength) return fail('Fichier vide');
+    return json(await storeMedia(db, bytes, mime, kind, url.searchParams.get('name') || ''), 201);
+  }
+  if (mm0 && m === 'DELETE') {
+    await db.batch([db.prepare('DELETE FROM media WHERE id = ?').bind(mm0[1]), db.prepare('DELETE FROM media_chunks WHERE media_id = ?').bind(mm0[1])]);
+    return json({ ok: true });
+  }
+
+  // --- Avatars
+  if (path === '/api/avatars') {
+    if (m === 'GET') {
+      const { results } = await db.prepare('SELECT * FROM avatars ORDER BY created_at DESC').all();
+      return json(results.map((r) => ({ id: r.id, name: r.name, kind: r.kind, data: JSON.parse(r.data), createdAt: r.created_at })));
+    }
+    if (m === 'POST') {
+      const b = await body(req); const id = uid(), now = Date.now();
+      if (!['illustre', 'photo'].includes(b.kind)) return fail('Type d’avatar invalide');
+      await db.prepare('INSERT INTO avatars (id, name, kind, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, str(b.name, 60, 'Nom'), b.kind, payload(b.data), now, now).run();
+      return json({ id }, 201);
+    }
+  }
+  mm = path.match(/^\/api\/avatars\/([\w-]{8,64})$/);
+  if (mm) {
+    if (m === 'PUT') {
+      const b = await body(req);
+      const r = await db.prepare('UPDATE avatars SET name = ?, data = ?, updated_at = ? WHERE id = ?').bind(str(b.name, 60, 'Nom'), payload(b.data), Date.now(), mm[1]).run();
+      return r.meta.changes ? json({ ok: true }) : fail('Avatar introuvable', 404);
+    }
+    if (m === 'DELETE') { await db.prepare('DELETE FROM avatars WHERE id = ?').bind(mm[1]).run(); return json({ ok: true }); }
+  }
+
+  // --- Intelligence artificielle (fal.ai)
+  if (path === '/api/ai/status' && m === 'GET') {
+    const month = new Date(); month.setDate(1); month.setHours(0, 0, 0, 0);
+    const spent = await db.prepare("SELECT COALESCE(SUM(cost), 0) AS s, COUNT(*) AS n FROM ai_jobs WHERE status != 'error' AND created_at >= ?").bind(month.getTime()).first();
+    return json({ configured: !!(await falKey(env, db)), fromEnv: !!env.FAL_KEY, monthSpent: spent.s, monthJobs: spent.n, models: AI_MODELS });
+  }
+  if (path === '/api/ai/key' && m === 'PUT') {
+    const b = await body(req);
+    const k = String(b.key || '').trim();
+    if (k && !/^[\w:.\-]{20,200}$/.test(k)) return fail('Clé invalide');
+    if (k) await putSetting(db, 'fal_key', k); else await db.prepare("DELETE FROM settings WHERE key = 'fal_key'").run();
+    return json({ ok: true });
+  }
+  if (path === '/api/ai/jobs' && m === 'POST') {
+    const b = await body(req);
+    const key = await falKey(env, db);
+    if (!key) return fail('Aucune clé fal.ai configurée. Ajoute-la dans Réglages.', 400);
+    const model = AI_MODELS[b.model];
+    if (!model) return fail('Modèle inconnu');
+    const origin = url.origin;
+    let input, cost, kind, meta = {};
+    if (b.model === 'tts') {
+      const text = str(b.text, 5000, 'Texte');
+      input = { text, voice: String(b.voice || 'Aria').slice(0, 60), stability: 0.5 };
+      cost = (text.length / 1000) * model.perKChar; kind = 'tts'; meta = { text: text.slice(0, 200), voice: input.voice };
+    } else {
+      if (!b.imageMedia || !b.audioMedia) return fail('Il faut une photo d’avatar et une voix.');
+      const dur = Math.max(1, Math.min(300, +b.duration || 10));
+      input = { image_url: await mediaUrl(db, origin, b.imageMedia), audio_url: await mediaUrl(db, origin, b.audioMedia), prompt: String(b.prompt || 'Présentateur naturel et professionnel, regard caméra, sourire léger, gestes mesurés.').slice(0, 500) };
+      cost = dur * model.perSecond; kind = 'avatar'; meta = { duration: dur, key: String(b.key || '').slice(0, 120) };
+    }
+    const q = await falFetch(key, `${env.FAL_BASE || 'https://queue.fal.run'}/${model.endpoint}`, { method: 'POST', body: JSON.stringify(input) });
+    if (!q?.status_url || !q?.response_url) return fail('Réponse inattendue du fournisseur d’IA', 502);
+    const id = uid(), now = Date.now();
+    await db.prepare('INSERT INTO ai_jobs (id, kind, model, status, status_url, response_url, result_meta, cost, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, kind, b.model, 'queued', q.status_url, q.response_url, JSON.stringify(meta), Math.round(cost * 1000) / 1000, now, now).run();
+    return json({ id, status: 'queued', cost }, 201);
+  }
+  mm = path.match(/^\/api\/ai\/jobs\/([\w-]{8,64})$/);
+  if (mm && m === 'GET') {
+    let job = await db.prepare('SELECT * FROM ai_jobs WHERE id = ?').bind(mm[1]).first();
+    if (!job) return fail('Tâche introuvable', 404);
+    try { job = await advanceJob(env, db, job); }
+    catch (e) {
+      if (e instanceof HttpError && e.status !== 502) throw e;
+      if (Date.now() - job.created_at > 45 * 60e3) {
+        await db.prepare("UPDATE ai_jobs SET status = 'error', error = ?, updated_at = ? WHERE id = ?").bind(e.message, Date.now(), job.id).run();
+        job = { ...job, status: 'error', error: e.message };
+      }
+    }
+    return json(publicJob(job));
   }
 
   // --- Exports (historique)
