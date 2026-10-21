@@ -25,7 +25,11 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
   - **Personnages cartoon, gratuits et illimités** : une galerie de 16 personnages prêts à l’emploi (sélection multiple), et un personnalisateur complet. 5 espèces (humain, robot, chat, renard, ours), 3 styles de dessin (classique, mascotte, contour BD), forme du visage, yeux, sourcils, nez, bouche, 11 coiffures, 5 tenues (couleurs du client ou au choix), lunettes, casquette, bonnet, casque audio, barbes, et un bouton « Aléatoire ». Ils respirent, clignent des yeux, bougent la tête, gesticulent, et leur bouche suit la voix.
   - **Réalistes par IA, en option** : une photo devient une personne qui parle (Kling Avatar v2 via fal.ai, environ 0,056 $ par seconde en Standard, 0,115 $ en Pro).
 - **Voix** :
-  - **voix gratuites et illimitées à partir du texte**, calculées dans le navigateur (Piper) : Siwis et Jessica (féminines), Pierre et Gilles (masculines), vitesse réglable. La voix se télécharge une seule fois (27 à 74 Mo), ensuite la génération prend quelques secondes ;
+  - **voix gratuites et illimitées à partir du texte**, calculées dans le navigateur (Piper), en trois langues :
+    - français : Siwis et Jessica (féminines), Pierre et Gilles (masculines) ;
+    - anglais : Kristin (américaine, domaine public), Joe (américain, CC0), Cori (britannique, domaine public), Alba (écossaise, CC BY 4.0), Northern (britannique, CC BY-SA 4.0) ;
+    - arabe : Kareem (Jordanie). Licence du jeu de données non précisée : à réserver aux essais ; pour une vidéo commerciale en arabe, utiliser la voix IA premium ;
+    - vitesse réglable ; texte arabe affiché de droite à gauche (sous-titres, éléments, saisie), polices arabes Cairo, Tajawal et Amiri. La voix se télécharge une seule fois (27 à 74 Mo), ensuite la génération prend quelques secondes ;
   - enregistrement au micro directement dans l’éditeur, ou import d’un fichier audio ;
   - voix IA premium en option (ElevenLabs via fal.ai, environ 0,10 $ pour 1 000 caractères).
 - **Scène Présentateur** : avatar à côté du contenu, en médaillon ou plein cadre ; les points s’affichent au fil de la voix ; sous-titres synchronisés ; durée calée automatiquement sur la voix.

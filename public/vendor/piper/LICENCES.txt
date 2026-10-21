@@ -8,3 +8,12 @@ Voix françaises proposées (téléchargées à la demande depuis Hugging Face v
 - fr_FR-siwis : jeu de données SIWIS, licence CC BY 4.0 — mention de la source requise
 - fr_FR-upmc (Jessica, Pierre) : jeu de données UPMC, licence CC BY-SA 4.0 — mention de la source requise
 - fr_FR-gilles : licence CC0 (domaine public)
+
+Voix anglaises :
+- en_US-kristin : domaine public
+- en_US-joe : CC0
+- en_GB-cori : domaine public
+- en_GB-alba : CC BY 4.0 (mention de la source requise)
+- en_GB-northern_english_male : CC BY-SA 4.0 (mention de la source requise)
+Voix arabe :
+- ar_JO-kareem : jeu de données sans licence déclarée (https://github.com/AliMokhammad/arabicttstrain), modèle affiné à partir de en_US-lessac. Usage commercial déconseillé.

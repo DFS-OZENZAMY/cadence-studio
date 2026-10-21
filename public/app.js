@@ -159,13 +159,26 @@ async function toWav(blob, sr = 24000) {
 }
 const fmtUsd = (n) => `${(+n || 0).toFixed(2).replace('.', ',')} $`;
 /* Voix gratuites : Piper, calculé dans le navigateur */
+const FREE_LANGS = { fr: 'Français', en: 'English', ar: 'العربية' };
 const FREE_VOICES = [
-  { key: 'fr_FR-siwis-medium#0', label: 'Siwis, voix féminine', size: '63 Mo', credit: 'Siwis, CC BY 4.0' },
-  { key: 'fr_FR-upmc-medium#0', label: 'Jessica, voix féminine', size: '74 Mo', credit: 'UPMC, CC BY-SA 4.0' },
-  { key: 'fr_FR-upmc-medium#1', label: 'Pierre, voix masculine', size: '74 Mo', credit: 'UPMC, CC BY-SA 4.0' },
-  { key: 'fr_FR-gilles-low#0', label: 'Gilles, voix masculine (légère)', size: '27 Mo', credit: 'Gilles, CC0' },
-  { key: 'fr_FR-siwis-low#0', label: 'Siwis, voix féminine (légère)', size: '27 Mo', credit: 'Siwis, CC BY 4.0' },
+  { key: 'fr_FR-siwis-medium#0', lang: 'fr', label: 'Siwis, voix féminine', size: '63 Mo', credit: 'Siwis, CC BY 4.0' },
+  { key: 'fr_FR-upmc-medium#0', lang: 'fr', label: 'Jessica, voix féminine', size: '74 Mo', credit: 'UPMC, CC BY-SA 4.0' },
+  { key: 'fr_FR-upmc-medium#1', lang: 'fr', label: 'Pierre, voix masculine', size: '74 Mo', credit: 'UPMC, CC BY-SA 4.0' },
+  { key: 'fr_FR-gilles-low#0', lang: 'fr', label: 'Gilles, voix masculine (légère)', size: '27 Mo', credit: 'Gilles, CC0' },
+  { key: 'fr_FR-siwis-low#0', lang: 'fr', label: 'Siwis, voix féminine (légère)', size: '27 Mo', credit: 'Siwis, CC BY 4.0' },
+  { key: 'en_US-kristin-medium#0', lang: 'en', label: 'Kristin, féminine (américain)', size: '63 Mo', credit: 'Kristin, domaine public' },
+  { key: 'en_US-joe-medium#0', lang: 'en', label: 'Joe, masculine (américain)', size: '63 Mo', credit: 'Joe, CC0' },
+  { key: 'en_GB-cori-medium#0', lang: 'en', label: 'Cori, féminine (britannique)', size: '63 Mo', credit: 'Cori, domaine public' },
+  { key: 'en_GB-alba-medium#0', lang: 'en', label: 'Alba, féminine (écossais)', size: '63 Mo', credit: 'Alba, CC BY 4.0' },
+  { key: 'en_GB-northern_english_male-medium#0', lang: 'en', label: 'Northern, masculine (britannique)', size: '63 Mo', credit: 'Northern English Male, CC BY-SA 4.0' },
+  { key: 'ar_JO-kareem-medium#0', lang: 'ar', label: 'Kareem, masculine (arabe de Jordanie)', size: '63 Mo', credit: 'Kareem, licence non précisée', warn: true },
 ];
+const voiceLang = (key) => (FREE_VOICES.find((v) => v.key === key) || FREE_VOICES[0]).lang;
+const LANG_HINT = {
+  ar: 'Arabe : ajoute les voyelles (harakat) pour une meilleure prononciation. Licence de cette voix non précisée : pour une vidéo commerciale, préfère la voix IA premium, qui parle aussi arabe.',
+  en: 'Anglais : écris le texte directement en anglais.',
+  fr: '',
+};
 let piperMod = null, piperVoiceLoaded = null;
 async function freeTts(text, voiceKey, speed, onProgress) {
   const [voiceId, spk] = voiceKey.split('#');
@@ -1304,19 +1317,21 @@ function fieldHtml(f, props) {
       <div class="row" style="flex-wrap:wrap"><button class="btn" data-ed="recordVoice">${ic('mic')}Enregistrer</button><button class="btn" data-ed="uploadVoice">${ic('upload')}Importer</button></div>
       <div class="row"><select data-tts-voice aria-label="Voix IA" style="flex:1">${Object.entries(TTS_VOICES).map(([g, l]) => `<optgroup label="${g}">${l.map((n) => `<option ${(sc.props.ttsVoice || 'Aria') === n ? 'selected' : ''}>${n}</option>`).join('')}</optgroup>`).join('')}</select>
         <button class="btn" data-ed="ttsVoice" ${state.ai.configured && !job && chars ? '' : 'disabled'}>${ic('spark')}Voix IA</button></div>
-      <span class="hint" style="color:var(--stage-muted)">${state.ai.configured ? `Voix IA premium : environ ${fmtUsd(Math.max(0.01, (chars / 1000) * 0.1))}.` : 'Voix IA premium : ajoute une clé fal.ai dans Réglages.'}</span>
+      <span class="hint" style="color:var(--stage-muted)">${state.ai.configured ? `Voix IA premium, en français, anglais, arabe et 26 autres langues (elle suit la langue du texte) : environ ${fmtUsd(Math.max(0.01, (chars / 1000) * 0.1))}.` : 'Voix IA premium : ajoute une clé fal.ai dans Réglages.'}</span>
       ${v ? `<button class="btn" data-ed="syncTitles" style="justify-self:start">${ic('text')}Créer des titres synchronisés avec la voix</button>` : ''}
       <div class="free-tts">
         <div class="label" style="display:flex;justify-content:space-between"><span>Voix gratuite</span><span class="badge-free">Gratuit, illimité</span></div>
-        <div class="row"><select data-free-voice aria-label="Voix gratuite" style="flex:1">${FREE_VOICES.map((fv) => `<option value="${fv.key}" ${(sc.props.freeVoice || FREE_VOICES[0].key) === fv.key ? 'selected' : ''}>${esc(fv.label)}</option>`).join('')}</select>
+        <div class="segmented" style="margin-bottom:2px">${Object.entries(FREE_LANGS).map(([k, l]) => `<button data-ed="freeLang" data-lang="${k}" aria-pressed="${voiceLang(sc.props.freeVoice || FREE_VOICES[0].key) === k}">${l}</button>`).join('')}</div>
+        <div class="row"><select data-free-voice aria-label="Voix gratuite" style="flex:1">${FREE_VOICES.filter((fv) => fv.lang === voiceLang(sc.props.freeVoice || FREE_VOICES[0].key)).map((fv) => `<option value="${fv.key}" ${(sc.props.freeVoice || FREE_VOICES[0].key) === fv.key ? 'selected' : ''}>${esc(fv.label)}</option>`).join('')}</select>
           <button class="btn primary" data-ed="freeVoice" ${chars && !job ? '' : 'disabled'}>${ic('play')}Générer</button></div>
         <div class="range-row"><span class="hint" style="color:var(--stage-muted)">Vitesse</span><input type="range" min="0.75" max="1.35" step="0.05" value="${sc.props.freeSpeed || 1}" data-free-speed aria-label="Vitesse de la voix"><output id="freeSpeedOut">×${(+(sc.props.freeSpeed || 1)).toFixed(2).replace('.', ',')}</output></div>
+        ${LANG_HINT[voiceLang(sc.props.freeVoice || FREE_VOICES[0].key)] ? `<p class="hint" style="color:${FREE_VOICES.find((x) => x.key === sc.props.freeVoice)?.warn ? '#F2B54A' : 'var(--stage-muted)'}">${LANG_HINT[voiceLang(sc.props.freeVoice || FREE_VOICES[0].key)]}</p>` : ''}
         <div id="freeStatus" class="hint" style="color:var(--stage-muted)">Lit le texte prononcé, calculé sur ton ordinateur. Au premier usage, la voix se télécharge une fois (${esc((FREE_VOICES.find((fv) => fv.key === (sc.props.freeVoice || FREE_VOICES[0].key)) || FREE_VOICES[0]).size)}), ensuite c’est instantané.</div>
       </div>
     </div></div>`;
   }
   if (f.type === 'text') return `<label class="field"><span>${esc(f.label)}</span><input data-k="${f.k}" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}"></label>`;
-  if (f.type === 'textarea') return `<label class="field"><span>${esc(f.label)}</span><textarea data-k="${f.k}" rows="${f.rows || 2}" placeholder="${esc(f.placeholder || '')}">${esc(v ?? '')}</textarea></label>`;
+  if (f.type === 'textarea') return `<label class="field"><span>${esc(f.label)}</span><textarea dir="auto" data-k="${f.k}" rows="${f.rows || 2}" placeholder="${esc(f.placeholder || '')}">${esc(v ?? '')}</textarea></label>`;
   if (f.type === 'toggle') return `<label class="switch"><input type="checkbox" data-k="${f.k}" ${v ? 'checked' : ''}>${esc(f.label)}</label>`;
   if (f.type === 'select') return `<label class="field"><span>${esc(f.label)}</span><select data-k="${f.k}">${Object.entries(f.options).map(([k, l]) => `<option value="${k}" ${String(v) === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
   if (f.type === 'image') {
@@ -1487,8 +1502,10 @@ function addVoiceDialog() {
   openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Ajouter une voix off</h2><p>Elle sera posée sur la timeline audio à ${fmtTime(at)}, à la tête de lecture. Tu pourras ensuite la déplacer, la couper et la régler.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
     <div class="segmented" id="vSrc"><button data-src="free" aria-pressed="true">${ic('text')}Depuis un texte (gratuit)</button><button data-src="rec" aria-pressed="false">${ic('mic')}Enregistrer</button><button data-src="file" aria-pressed="false">${ic('upload')}Importer</button></div>
     <div style="display:grid;gap:12px">
-      <label class="field"><span>Texte à dire</span><textarea id="vText" rows="4" placeholder="Bonjour ! Découvrez aujourd’hui…"></textarea></label>
-      <div class="grid-2"><label class="field"><span>Voix</span><select id="vVoice">${FREE_VOICES.map((fv) => `<option value="${fv.key}">${esc(fv.label)}</option>`).join('')}</select></label>
+      <label class="field"><span>Texte à dire</span><textarea dir="auto" id="vText" rows="4" placeholder="Bonjour ! Découvrez aujourd’hui…"></textarea></label>
+      <div class="segmented" id="vLang">${Object.entries(FREE_LANGS).map(([k, l], i) => `<button data-lang="${k}" aria-pressed="${i === 0}">${l}</button>`).join('')}</div>
+      <p class="hint" id="vLangHint" style="display:none"></p>
+      <div class="grid-2"><label class="field"><span>Voix</span><select id="vVoice">${FREE_VOICES.filter((fv) => fv.lang === 'fr').map((fv) => `<option value="${fv.key}">${esc(fv.label)}</option>`).join('')}</select></label>
         <label class="field"><span>Vitesse</span><select id="vSpeed">${[0.85, 0.95, 1, 1.1, 1.2].map((x) => `<option value="${x}" ${x === 1 ? 'selected' : ''}>×${String(x).replace('.', ',')}</option>`).join('')}</select></label></div>
       <label class="switch"><input type="checkbox" id="vSubs" checked>Créer les sous-titres synchronisés (éléments globaux, modifiables)</label>
       <p class="hint" id="vStatus">Calculée sur ton ordinateur, gratuite et illimitée. Le premier usage télécharge la voix une fois.</p>
@@ -1498,6 +1515,13 @@ function addVoiceDialog() {
     size: 'mid',
     onMount: (m) => {
       const go = $('#vGo', m);
+      $('#vLang', m).addEventListener('click', (e) => {
+        const b = e.target.closest('[data-lang]'); if (!b) return;
+        $$('#vLang button', m).forEach((x) => x.setAttribute('aria-pressed', x === b));
+        $('#vVoice', m).innerHTML = FREE_VOICES.filter((fv) => fv.lang === b.dataset.lang).map((fv) => `<option value="${fv.key}">${esc(fv.label)}</option>`).join('');
+        const hint = $('#vLangHint', m); hint.textContent = LANG_HINT[b.dataset.lang] || ''; hint.style.display = LANG_HINT[b.dataset.lang] ? '' : 'none'; hint.style.color = b.dataset.lang === 'ar' ? '#B87900' : '';
+        $('#vText', m).placeholder = b.dataset.lang === 'ar' ? 'مرحبًا! اكتشفوا اليوم عرضنا الجديد…' : b.dataset.lang === 'en' ? 'Hello! Discover our new offer today…' : 'Bonjour ! Découvrez aujourd’hui…';
+      });
       $('#vSrc', m).addEventListener('click', async (e) => {
         const b = e.target.closest('[data-src]'); if (!b || busy || b.dataset.src === 'free') return;
         if (b.dataset.src === 'rec') { closeModal(); const wav = await recordDialog(''); if (wav) await addVoiceClip(wav, 'Voix enregistrée', at); }
@@ -1512,6 +1536,7 @@ function addVoiceDialog() {
           const fv = FREE_VOICES.find((x) => x.key === key);
           closeModal();
           await addVoiceClip(await toWav(blob), `Voix ${fv?.label.split(',')[0] || ''}`.trim(), at, subs ? text : '');
+          if (fv?.warn) toast('Voix Kareem : licence non précisée, à éviter pour un usage commercial.');
         } catch (err) { console.error(err); busy = false; go.disabled = false; go.innerHTML = `${ic('play')}Générer et ajouter`; $('#vErr', m).textContent = 'La voix n’a pas pu être générée. Vérifie ta connexion au premier usage.'; }
       });
     },
@@ -1532,7 +1557,7 @@ async function addVoiceClip(wav, name, at, subtitleText = '') {
     await reloadAssets();
     if (subtitleText) {
       const env = ed.assets.clipEnv?.[media];
-      const sentences = subtitleText.match(/[^.!?…]+[.!?…]*/g)?.map((x) => x.trim()).filter(Boolean) || [subtitleText];
+      const sentences = subtitleText.match(/[^.!?…؟]+[.!?…؟]*/g)?.map((x) => x.trim()).filter(Boolean) || [subtitleText];
       const times = env ? V.estimateTimes(env, sentences.map((x) => x.length + 4)) : sentences.map((_, i) => (i * buf.duration) / sentences.length);
       sentences.forEach((txt, i) => {
         const st = c.at + times[i], en = i < sentences.length - 1 ? c.at + times[i + 1] - 0.05 : c.at + c.dur + 0.2;
@@ -1832,7 +1857,7 @@ function elementPanel() {
   const fonts = { titre: 'Police des titres', texte: 'Police du texte', ...Object.fromEntries(Object.keys(FONT_LIBRARY).map((f) => [f, f])) };
   let content = '';
   if (el.type === 'text') content = `
-    <label class="field"><span>Texte</span><textarea data-elk="text" rows="3">${esc(el.text || '')}</textarea></label>
+    <label class="field"><span>Texte</span><textarea dir="auto" data-elk="text" rows="3">${esc(el.text || '')}</textarea></label>
     <p class="hint" style="color:var(--stage-muted)">Astuce : entoure un mot d’astérisques, *comme ceci*, pour le mettre en couleur d’accent.</p>
     ${sel('font', 'Police', fonts, el.font || 'titre')}
     ${rng('size', 'Taille', el.size || 72, 16, 320, 2, (v) => `${v} px`)}
@@ -2456,6 +2481,7 @@ function onEdClick(e) {
     setPlaying(false); vo.el.currentTime = 0; vo.el.play(); b.innerHTML = ic('pause');
     vo.el.onended = () => { b.innerHTML = ic('play'); };
   }
+  else if (a === 'freeLang' && s) { beforeChange(); s.props.freeVoice = FREE_VOICES.find((fv) => fv.lang === b.dataset.lang).key; changed({ inspector: true }); }
   else if (a === 'freeVoice' && s) {
     const text = (s.props.script || '').trim(); if (!text) return toast('Écris d’abord le texte prononcé.');
     const sid = s.id, key = s.props.freeVoice || FREE_VOICES[0].key, speed = s.props.freeSpeed || 1;
@@ -2528,7 +2554,7 @@ function onEdClick(e) {
   }
   else if (a === 'syncTitles') {
     const s = curScene(), vo = ed.assets.voices?.[s.props.voice]; if (!vo) return;
-    const sentences = String(s.props.script || '').match(/[^.!?…]+[.!?…]*/g)?.map((x) => x.trim()).filter(Boolean) || [];
+    const sentences = String(s.props.script || '').match(/[^.!?…؟]+[.!?…؟]*/g)?.map((x) => x.trim()).filter(Boolean) || [];
     if (!sentences.length) return toast('Écris d’abord le texte prononcé.');
     const times = V.estimateTimes(vo, sentences.map((x) => x.length + 4));
     beforeChange();

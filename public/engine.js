@@ -72,6 +72,9 @@ export const FONT_LIBRARY = {
   'Archivo Black': { cat: 'Impact', dw: 400, bw: 400 },
   'Caveat': { cat: 'Manuscrite', dw: 700, bw: 400, track: 0 },
   'Pacifico': { cat: 'Manuscrite', dw: 400, bw: 400, track: 0 },
+  'Cairo': { cat: 'Arabe', dw: 800, bw: 500 },
+  'Tajawal': { cat: 'Arabe', dw: 800, bw: 500 },
+  'Amiri': { cat: 'Arabe', dw: 700, bw: 400 },
 };
 /** Police et tailles effectives : charte du client, puis réglages de la vidéo, puis ceux de la scène. */
 export function resolveText(brand, projText = {}, sceneText = {}) {
@@ -145,7 +148,20 @@ export function contrast(a, b) { const l1 = lum(a), l2 = lum(b); return (Math.ma
 export const onColor = (hex) => (lum(hex) > 0.45 ? '#111111' : '#FFFFFF');
 
 function setFont(ctx, family, weight, size) {
-  ctx.font = `${weight} ${Math.max(1, Math.round(size * 10) / 10)}px "${family}", "Segoe UI", system-ui, sans-serif`;
+  ctx.font = `${weight} ${Math.max(1, Math.round(size * 10) / 10)}px "${family}", "Cairo", "Segoe UI", "Noto Sans Arabic", system-ui, sans-serif`;
+}
+/* Arabe (et hébreu) : sens d'écriture de droite à gauche, appliqué automatiquement au texte concerné. */
+export const RTL_RE = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+for (const Proto of [globalThis.CanvasRenderingContext2D, globalThis.OffscreenCanvasRenderingContext2D].filter(Boolean)) {
+  if (Proto.prototype.__cadenceRtl) continue;
+  for (const fn of ['fillText', 'strokeText']) {
+    const orig = Proto.prototype[fn];
+    Proto.prototype[fn] = function (text, ...rest) {
+      if (typeof text === 'string' && RTL_RE.test(text) && this.direction !== 'rtl') { const d = this.direction; this.direction = 'rtl'; const r = orig.call(this, text, ...rest); this.direction = d; return r; }
+      return orig.call(this, text, ...rest);
+    };
+  }
+  Proto.prototype.__cadenceRtl = true;
 }
 function setTrack(ctx, px) { if ('letterSpacing' in ctx) ctx.letterSpacing = `${px}px`; }
 function wrap(ctx, text, maxW) {
@@ -337,7 +353,7 @@ function envAt(v, lt) {
 function captionChunks(text) {
   const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
   const out = []; let cur = [];
-  for (const w of words) { cur.push(w); if (cur.length >= 7 || (/[.!?;:,…]$/.test(w) && cur.length >= 3)) { out.push(cur.join(' ')); cur = []; } }
+  for (const w of words) { cur.push(w); if (cur.length >= 7 || (/[.!?;:,…؟،]$/.test(w) && cur.length >= 3)) { out.push(cur.join(' ')); cur = []; } }
   if (cur.length) out.push(cur.join(' '));
   return out;
 }
@@ -1121,7 +1137,7 @@ export const SCENES = {
           const q = E.outCubic(prog(lt, c.st, 0.18));
           ctx.save(); ctx.globalAlpha *= q; ctx.translate(0, (1 - q) * 10 * u);
           ctx.fillStyle = 'rgba(0,0,0,.68)'; rrect(ctx, bx, by, bw, bh, 16 * u); ctx.fill();
-          ctx.fillStyle = pal.accent; ctx.fillRect(bx + 16 * u, by + bh - 6 * u, (bw - 32 * u) * clamp((lt - c.st) / (c.en - c.st)), 3 * u);
+          ctx.fillStyle = pal.accent; { const pw = (bw - 32 * u) * clamp((lt - c.st) / (c.en - c.st)); ctx.fillRect(RTL_RE.test(c.text) ? bx + bw - 16 * u - pw : bx + 16 * u, by + bh - 6 * u, pw, 3 * u); }
           ctx.fillStyle = '#FFFFFF'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
           C.lines.forEach((l, j) => ctx.fillText(l, W / 2, by + 16 * u + C.size * 0.98 + j * C.size * 1.3));
           ctx.restore();
@@ -1609,7 +1625,9 @@ function drawTextEl(S, el, L, st, lt, x0, y0) {
   const acc = S.pal.accent;
   const bgCol = el.bg ? colorOf(S, el.bg) : null;
   const color = (el.color === 'auto' || !el.color) && bgCol && bgCol.startsWith('#') ? onColor(bgCol) : colorOf(S, el.color);
-  const mode = (el.anim || {}).in;
+  const rtl = RTL_RE.test(el.text || '');
+  let mode = (el.anim || {}).in;
+  if (rtl && (mode === 'letters' || mode === 'typewriter')) mode = 'words';
   const elT = lt - (+el.start || 0) - (+(el.anim || {}).inDelay || 0);
   const wt = Array.isArray(el.wordTimes) && el.wordTimes.length ? el.wordTimes : null;
   if (el.shadow) { ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 18 * u; ctx.shadowOffsetY = 6 * u; }
@@ -1623,8 +1641,8 @@ function drawTextEl(S, el, L, st, lt, x0, y0) {
       const k = mode === 'highlight' ? clamp(st.rev * L.lines.length - li) : 1;
       if (k > 0) { ctx.save(); ctx.shadowColor = 'transparent'; ctx.fillStyle = bgc; rrect(ctx, lx - padX, base - L.size * 0.86, (line.w + padX * 2) * k, L.size * 1.12, L.size * 0.14); ctx.fill(); ctx.restore(); }
     }
-    if (mode === 'mask') { ctx.save(); ctx.beginPath(); ctx.rect(lx - 10, base - L.size * 1.1, (line.w + 20) * clamp(st.rev * L.lines.length - li), L.size * 1.5); ctx.clip(); }
-    let x = lx;
+    if (mode === 'mask') { const k = clamp(st.rev * L.lines.length - li), mw = (line.w + 20) * k; ctx.save(); ctx.beginPath(); ctx.rect(rtl ? lx + line.w + 10 - mw : lx - 10, base - L.size * 1.1, mw, L.size * 1.5); ctx.clip(); }
+    let x = rtl ? lx + line.w : lx;
     for (const wd of line.words) {
       let a = 1, dy = 0, txt = wd.t;
       if (mode === 'words') {
@@ -1645,11 +1663,12 @@ function drawTextEl(S, el, L, st, lt, x0, y0) {
         ci--; 
       } else if (txt && a > 0) {
         ctx.globalAlpha = st.alpha * a;
-        if (el.stroke) { ctx.strokeStyle = el.stroke; ctx.lineWidth = 5 * u; ctx.lineJoin = 'round'; ctx.strokeText(txt, x, base + dy); }
-        ctx.fillStyle = fill; ctx.fillText(txt, x, base + dy);
+        const dx0 = rtl ? x - wd.w : x;
+        if (el.stroke) { ctx.strokeStyle = el.stroke; ctx.lineWidth = 5 * u; ctx.lineJoin = 'round'; ctx.strokeText(txt, dx0, base + dy); }
+        ctx.fillStyle = fill; ctx.fillText(txt, dx0, base + dy);
       }
       if (mode !== 'letters') ci += wd.t.length; else ci++;
-      x += wd.w + L.space; wi++;
+      x += rtl ? -(wd.w + L.space) : wd.w + L.space; wi++;
     }
     if (mode === 'typewriter' && st.rev < 1 && li === L.lines.length - 1 && Math.floor(lt * 2.5) % 2 === 0) { ctx.globalAlpha = st.alpha; ctx.fillStyle = color; ctx.fillRect(x - L.space + 4 * u, base - L.size * 0.8, 4 * u, L.size * 0.9); }
     if (mode === 'mask') ctx.restore();
