@@ -24,7 +24,9 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, project_id TEXT, project_name TEXT, client_id TEXT, format TEXT, quality TEXT, duration REAL, size INTEGER, created_at INTEGER NOT NULL)`,
 ];
 let ready = null;
-const ensure = (db) => (ready ||= db.batch(SCHEMA.map((s) => db.prepare(s))).catch((e) => { ready = null; throw e; }));
+const ensure = (db) => (ready ||= db.batch(SCHEMA.map((s) => db.prepare(s)))
+  .then(() => db.prepare('ALTER TABLE recordings ADD COLUMN place TEXT').run().catch(() => { /* colonne déjà présente */ }))
+  .catch((e) => { ready = null; throw e; }));
 
 const HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' };
 const json = (body, status = 200, extra = {}) => new Response(JSON.stringify(body), { status, headers: { ...HEADERS, ...extra } });
@@ -396,7 +398,7 @@ async function api(req, env, url) {
   if (path === '/api/recordings') {
     if (m === 'GET') {
       const { results } = await db.prepare('SELECT * FROM recordings ORDER BY created_at DESC LIMIT 300').all();
-      return json(results.map((r) => ({ id: r.id, title: r.title, driveId: r.drive_id, driveUrl: r.drive_url, duration: r.duration, size: r.size, mime: r.mime, thumb: r.thumb, shared: !!r.shared, createdAt: r.created_at })));
+      return json(results.map((r) => ({ id: r.id, title: r.title, driveId: r.drive_id, driveUrl: r.drive_url, duration: r.duration, size: r.size, mime: r.mime, thumb: r.thumb, shared: !!r.shared, place: r.place || (r.drive_id ? 'drive' : 'ordinateur'), createdAt: r.created_at })));
     }
     if (m === 'POST') {
       const b = await body(req);
@@ -405,8 +407,9 @@ async function api(req, env, url) {
       if (driveId && !/^[\w-]+$/.test(driveId)) return fail('Identifiant Drive invalide');
       const driveUrl = typeof b.driveUrl === 'string' && /^https:\/\/(drive|docs)\.google\.com\//.test(b.driveUrl) ? b.driveUrl.slice(0, 400) : null;
       const id = uid();
-      await db.prepare('INSERT INTO recordings (id, title, drive_id, drive_url, duration, size, mime, thumb, shared, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)')
-        .bind(id, str(b.title, 160, 'Titre'), driveId, driveUrl, +b.duration || 0, +b.size || 0, String(b.mime || '').slice(0, 60), thumb, Date.now()).run();
+      const place = ['ordinateur', 'drive', 'autre'].includes(b.place) ? b.place : (driveId ? 'drive' : 'ordinateur');
+      await db.prepare('INSERT INTO recordings (id, title, drive_id, drive_url, duration, size, mime, thumb, shared, created_at, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)')
+        .bind(id, str(b.title, 160, 'Titre'), driveId, driveUrl, +b.duration || 0, +b.size || 0, String(b.mime || '').slice(0, 60), thumb, Date.now(), place).run();
       return json({ id }, 201);
     }
   }

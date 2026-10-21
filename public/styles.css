@@ -662,3 +662,15 @@ dialog[open] { animation: pop .18s ease-out; }
 .pip-bar.paused .rec-dot { animation: none; background: #F2B54A; }
 
 .rec-hud[hidden] { display: none !important; }
+
+/* ---------- Choix de la destination ---------- */
+.dest-label { font-weight: 800; font-size: 14px; }
+.dest-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.dest { position: relative; display: grid; gap: 4px; justify-items: start; text-align: left; padding: 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; }
+.dest .ic { width: 24px; height: 24px; color: var(--accent); margin-bottom: 4px; }
+.dest b { font-size: 14.5px; }
+.dest small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.dest:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dest:disabled { opacity: .6; cursor: progress; }
+.dest.last::after { content: 'Dernier choix'; position: absolute; top: 10px; right: 10px; font-size: 10.5px; font-weight: 800; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); }
+#rvDone { display: grid; gap: 8px; }

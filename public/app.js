@@ -60,6 +60,8 @@ const ICONS = {
   musicnav: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
   record: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/>',
   cloud: '<path d="M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1 0 8z"/>',
+  computer: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
   link: '<path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1"/><path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m14 6 4 4"/>',
   mic: '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
@@ -923,7 +925,7 @@ PAGES.enregistrements = () => `
   ${state.recordings.length ? `<div class="rec-grid">${state.recordings.map((r) => `<article class="rec-card">
       <a class="rec-thumb" ${r.driveId ? `href="${esc(r.driveUrl || D.driveViewUrl(r.driveId))}" target="_blank" rel="noopener"` : ''}>${r.thumb ? `<img src="${r.thumb}" alt="">` : `<span>${ic('record')}</span>`}<em>${fmtDur(r.duration || 0)}</em></a>
       <div class="rec-body"><strong title="${esc(r.title)}">${esc(r.title)}</strong>
-        <span class="muted">${new Date(r.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}, ${fmtBytes(r.size || 0)}${r.driveId ? ', sur Google Drive' : ', sur ton ordinateur'}</span>
+        <span class="muted">${new Date(r.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}, ${fmtBytes(r.size || 0)}${r.driveId ? ', sur Google Drive' : r.place === 'autre' ? ', envoyée vers une autre application' : ', sur ton ordinateur'}</span>
         <div class="row" style="gap:6px;flex-wrap:wrap">
           ${r.driveId ? `<button class="btn ${r.shared ? '' : 'primary'}" data-act="recShare" data-id="${r.id}">${ic('link')}${r.shared ? 'Copier le lien' : 'Partager'}</button>
             <a class="btn ghost" href="${esc(r.driveUrl || D.driveViewUrl(r.driveId))}" target="_blank" rel="noopener">Drive</a>` : ''}
@@ -1072,26 +1074,59 @@ function reviewDialog({ blob, duration, thumb }) {
   const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
   const defTitle = `Enregistrement du ${new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })} à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
   let saved = null, ctrl = null;
+  let lastDest = ''; try { lastDest = localStorage.getItem('cadence.recDest') || ''; } catch { /* rien */ }
+  const fileName = () => `${slug($('#rvTitle')?.value.trim() || defTitle)}.${ext}`;
+  let canShareFile = false; try { canShareFile = !!navigator.canShare?.({ files: [new File([blob], `video.${ext}`, { type: blob.type })] }); } catch { /* rien */ }
   openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Ton enregistrement</h2><p>${fmtDur(duration)}, ${fmtBytes(blob.size)} (${ext.toUpperCase()}).</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
     <div class="rec-review"><video src="${url}" controls playsinline></video></div>
     <label class="field"><span>Titre</span><input id="rvTitle" value="${esc(defTitle)}" maxlength="160"></label>
     <div id="rvProg" class="rv-prog" hidden><div class="bar"><i id="rvBar"></i></div><span id="rvTxt"></span></div>
     <div id="rvDone"></div>
+    <div class="dest-label">Où enregistrer la vidéo ?</div>
+    <div class="dest-grid">
+      <button class="dest ${lastDest === 'ordinateur' ? 'last' : ''}" id="rvLocal">${ic('computer')}<b>Mon ordinateur</b><small>${window.showSaveFilePicker ? 'Choisis le dossier : Bureau, Documents, OneDrive, Dropbox…' : 'Téléchargement dans ton dossier habituel'}</small></button>
+      ${D.driveAvailable() ? `<button class="dest ${lastDest === 'drive' ? 'last' : ''}" id="rvDrive">${ic('cloud')}<b>Google Drive</b><small>Dossier « Cadence », avec lien de partage</small></button>` : ''}
+      ${canShareFile ? `<button class="dest ${lastDest === 'autre' ? 'last' : ''}" id="rvOther">${ic('share')}<b>Autre application</b><small>OneDrive, e-mail, Teams… selon ton appareil</small></button>` : ''}
+    </div>
+    <p class="hint">Ces choix n’utilisent pas l’espace de la plateforme : Cadence garde seulement une fiche (titre, durée, petite vignette). Tu peux en choisir plusieurs.</p>
     <div class="dlg-foot" id="rvFoot">
       <button class="btn ghost danger" id="rvDiscard">${ic('trash')}Supprimer</button><span class="spacer"></span>
-      <button class="btn" id="rvDownload">${ic('exports')}Télécharger</button>
-      <button class="btn" id="rvToCadence" title="Importe la vidéo dans un nouveau projet (stockée sur la plateforme)">${ic('video')}Monter dans Cadence</button>
-      ${D.driveAvailable() ? `<button class="btn primary" id="rvDrive">${ic('cloud')}Enregistrer sur Google Drive</button>` : ''}
+      <button class="btn ghost" id="rvToCadence" title="La vidéo est copiée sur la plateforme pour être montée dans l’éditeur">${ic('video')}Monter dans l’éditeur<small class="muted" style="margin-left:6px;font-weight:600">(utilise l’espace de la plateforme)</small></button>
     </div></div>`, {
     size: 'wide',
     onClose: () => { ctrl?.abort(); setTimeout(() => URL.revokeObjectURL(url), 30_000); if (!ed) route(); },
     onMount: (m) => {
       const title = () => $('#rvTitle', m).value.trim() || defTitle;
       $('#rvDiscard', m).onclick = async () => { if (saved || await confirmBox({ title: 'Supprimer cet enregistrement ?', text: 'Il n’a été envoyé nulle part : il sera perdu.', ok: 'Supprimer', danger: true })) closeModal(); };
-      $('#rvDownload', m).onclick = async () => {
-        download(url, `${slug(title())}.${ext}`);
-        if (!saved) { const r = await api('/api/recordings', { method: 'POST', body: { title: title(), duration, size: blob.size, mime: blob.type, thumb } }); saved = { id: r.id }; await loadRecs(); }
-        toast('Téléchargement lancé', 'ok');
+      const remember = (d) => { try { localStorage.setItem('cadence.recDest', d); } catch { /* rien */ } };
+      const fiche = async (place, extra = {}) => {
+        if (saved?.id && !saved.driveId) await api(`/api/recordings/${saved.id}`, { method: 'DELETE' }).catch(() => {});
+        const r = await api('/api/recordings', { method: 'POST', body: { title: title(), duration, size: blob.size, mime: blob.type, thumb, place, ...extra } });
+        saved = { id: r.id, driveId: extra.driveId }; await loadRecs();
+      };
+      const doneLine = (html) => $('#rvDone', m).insertAdjacentHTML('beforeend', `<div class="rv-share"><b>${ic('check')}${html}</b></div>`);
+      $('#rvLocal', m).onclick = async () => {
+        const name = fileName();
+        if (window.showSaveFilePicker) {
+          try {
+            const h = await window.showSaveFilePicker({ suggestedName: name, startIn: 'desktop', types: [{ description: 'Vidéo', accept: { [blob.type || 'video/webm']: [`.${ext}`] } }] });
+            const wr = await h.createWritable(); await wr.write(blob); await wr.close();
+            if (!saved?.driveId) await fiche('ordinateur');
+            remember('ordinateur'); doneLine(`Enregistrée sur ton ordinateur : ${esc(h.name)}`); toast('Vidéo enregistrée', 'ok');
+          } catch (e) { if (e.name !== 'AbortError') toast(`Enregistrement impossible : ${e.message}`, 'error'); }
+          return;
+        }
+        download(url, name);
+        if (!saved?.driveId) await fiche('ordinateur');
+        remember('ordinateur'); doneLine('Téléchargée sur ton ordinateur (dossier Téléchargements)'); toast('Téléchargement lancé', 'ok');
+      };
+      const oBtn = $('#rvOther', m);
+      if (oBtn) oBtn.onclick = async () => {
+        try {
+          await navigator.share({ files: [new File([blob], fileName(), { type: blob.type })], title: title() });
+          if (!saved?.driveId) await fiche('autre');
+          remember('autre'); doneLine('Envoyée vers une autre application');
+        } catch (e) { if (e.name !== 'AbortError') toast('Partage impossible avec cette application : essaie « Mon ordinateur ».', 'error'); }
       };
       $('#rvToCadence', m).onclick = async () => {
         if (blob.size > 58e6) return toast('Trop lourd pour la plateforme (58 Mo maximum). Envoie-la sur Drive ou télécharge-la.', 'error');
@@ -1114,7 +1149,8 @@ function reviewDialog({ blob, duration, thumb }) {
         $('#rvProg', m).hidden = false; ctrl = new AbortController();
         try {
           const f = await D.uploadToDrive(blob, `${title()}.${ext}`, { signal: ctrl.signal, onProgress: (p) => { $('#rvBar', m).style.width = `${Math.round(p * 100)}%`; $('#rvTxt', m).textContent = `Envoi vers Google Drive, ${Math.round(p * 100)} %`; } });
-          const body = { title: title(), duration, size: blob.size, mime: blob.type, thumb, driveId: f.id, driveUrl: f.webViewLink || D.driveViewUrl(f.id) };
+          const body = { title: title(), duration, size: blob.size, mime: blob.type, thumb, place: 'drive', driveId: f.id, driveUrl: f.webViewLink || D.driveViewUrl(f.id) };
+          remember('drive');
           if (saved) await api(`/api/recordings/${saved.id}`, { method: 'DELETE' });
           const r = await api('/api/recordings', { method: 'POST', body }); saved = { id: r.id, driveId: f.id };
           await loadRecs();
@@ -3163,19 +3199,29 @@ async function runExport({ formats, quality, fps, music, volume }) {
       });
       const name = `${slug(c?.name || 'cadence')}-${slug(p.name)}-${fmt.replace(':', 'x')}-${Math.min(res.width, res.height)}p.mp4`;
       const url = URL.createObjectURL(res.blob);
-      results.push({ fmt, url, name, size: res.blob.size, codec: res.codec });
-      download(url, name);
+      results.push({ fmt, url, name, size: res.blob.size, codec: res.codec, blob: res.blob });
+      if (!window.showSaveFilePicker) download(url, name);
       api('/api/exports', { method: 'POST', body: { projectId: p.id, projectName: p.name, clientId: p.clientId, format: fmt, quality, duration: res.duration, size: res.blob.size } }).catch(() => {});
-      $('#exResults').insertAdjacentHTML('beforeend', `<div class="result"><span style="color:var(--ok)">${ic('check')}</span><div class="grow"><b>${esc(fmt)}</b> <span class="hint">${esc(name)}, ${fmtBytes(res.blob.size)}${res.codec !== 'avc' ? `, codec ${res.codec.toUpperCase()}` : ''}</span></div><a class="btn" href="${url}" download="${esc(name)}">${ic('exports')}Télécharger</a>${D.driveAvailable() ? `<button class="btn" data-drive-up="${results.length - 1}">${ic('cloud')}Sur Google Drive</button>` : ''}</div>`);
+      $('#exResults').insertAdjacentHTML('beforeend', `<div class="result"><span style="color:var(--ok)">${ic('check')}</span><div class="grow"><b>${esc(fmt)}</b> <span class="hint">${esc(name)}, ${fmtBytes(res.blob.size)}${res.codec !== 'avc' ? `, codec ${res.codec.toUpperCase()}` : ''}</span></div>${window.showSaveFilePicker ? `<button class="btn primary" data-save-as="${results.length - 1}">${ic('computer')}Enregistrer sous…</button>` : `<a class="btn" href="${url}" download="${esc(name)}">${ic('exports')}Télécharger</a>`}${D.driveAvailable() ? `<button class="btn" data-drive-up="${results.length - 1}">${ic('cloud')}Sur Google Drive</button>` : ''}</div>`);
     }
     delete modal.dataset.locked;
     $('#exTitle').innerHTML = `${ic('check')} Vidéo${results.length > 1 ? 's' : ''} prête${results.length > 1 ? 's' : ''}`;
-    $('#exSub').textContent = 'Le téléchargement a démarré. Tu peux aussi les retélécharger ci-dessous.';
+    $('#exSub').textContent = window.showSaveFilePicker ? 'Choisis où enregistrer : ton ordinateur (le dossier de ton choix) ou Google Drive. Rien n’est stocké sur la plateforme.' : 'Le téléchargement a démarré. Tu peux aussi les retélécharger ci-dessous.';
     $('#exInfo').textContent = 'Terminé'; $('#exPct').textContent = '100 %'; $('#exBar').style.width = '100%';
     const last = results[results.length - 1];
     $('#exPrev').innerHTML = `<video src="${last.url}" controls autoplay muted playsinline></video>`;
     $('#exFoot').innerHTML = '<button class="btn primary" data-close>Terminé</button>';
     $('#exResults').addEventListener('click', async (e) => {
+      const sv = e.target.closest('[data-save-as]');
+      if (sv) {
+        const r = results[+sv.dataset.saveAs]; if (!r) return;
+        try {
+          const h = await window.showSaveFilePicker({ suggestedName: r.name, startIn: 'desktop', types: [{ description: 'Vidéo MP4', accept: { 'video/mp4': ['.mp4'] } }] });
+          const wr = await h.createWritable(); await wr.write(r.blob); await wr.close();
+          sv.outerHTML = `<span class="hint" style="color:var(--ok)">${ic('check')}Enregistrée : ${esc(h.name)}</span>`; toast('Vidéo enregistrée', 'ok');
+        } catch (err) { if (err.name !== 'AbortError') toast(`Enregistrement impossible : ${err.message}`, 'error'); }
+        return;
+      }
       const b = e.target.closest('[data-drive-up]'); if (!b) return;
       const r = results[+b.dataset.driveUp]; if (!r) return;
       try {
