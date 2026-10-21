@@ -29,6 +29,43 @@ export const FONTS = {
   impact: { label: 'Impact', display: 'Anton', dw: 400, body: 'Inter Tight', bw: 600, upper: true, track: 0.01 },
   chaleureux: { label: 'Chaleureux', display: 'Fraunces', dw: 700, body: 'Inter Tight', bw: 400, upper: false, track: -0.02 },
 };
+/** Polices disponibles pendant l'édition (Google Fonts, chargées à la demande). */
+export const FONT_LIBRARY = {
+  'Inter Tight': { cat: 'Sans-serif', dw: 800, bw: 500 },
+  'Manrope': { cat: 'Sans-serif', dw: 800, bw: 500 },
+  'Montserrat': { cat: 'Sans-serif', dw: 800, bw: 400 },
+  'Poppins': { cat: 'Sans-serif', dw: 800, bw: 400 },
+  'Raleway': { cat: 'Sans-serif', dw: 800, bw: 400 },
+  'Nunito': { cat: 'Arrondie', dw: 800, bw: 400 },
+  'Space Grotesk': { cat: 'Géométrique', dw: 700, bw: 400 },
+  'Syne': { cat: 'Géométrique', dw: 800, bw: 400 },
+  'Playfair Display': { cat: 'Serif', dw: 700, bw: 400 },
+  'DM Serif Display': { cat: 'Serif', dw: 400, bw: 400 },
+  'Lora': { cat: 'Serif', dw: 700, bw: 400 },
+  'Fraunces': { cat: 'Serif', dw: 700, bw: 400 },
+  'Roboto Slab': { cat: 'Serif', dw: 700, bw: 400 },
+  'Anton': { cat: 'Impact', dw: 400, bw: 400, upper: true, track: 0.01 },
+  'Bebas Neue': { cat: 'Impact', dw: 400, bw: 400, upper: true, track: 0.02 },
+  'Oswald': { cat: 'Impact', dw: 700, bw: 400, upper: true },
+  'Archivo Black': { cat: 'Impact', dw: 400, bw: 400 },
+  'Caveat': { cat: 'Manuscrite', dw: 700, bw: 400, track: 0 },
+  'Pacifico': { cat: 'Manuscrite', dw: 400, bw: 400, track: 0 },
+};
+/** Police et tailles effectives : charte du client, puis réglages de la vidéo, puis ceux de la scène. */
+export function resolveText(brand, projText = {}, sceneText = {}) {
+  const base = FONTS[normBrand(brand).font] || FONTS.moderne;
+  const pick = (k) => (sceneText?.[k] ?? projText?.[k] ?? null);
+  const F = { ...base };
+  const d = pick('display'), bo = pick('body');
+  if (d && FONT_LIBRARY[d]) { const L0 = FONT_LIBRARY[d]; Object.assign(F, { display: d, dw: L0.dw, upper: !!L0.upper, track: L0.track ?? -0.01 }); }
+  if (bo && FONT_LIBRARY[bo]) Object.assign(F, { body: bo, bw: FONT_LIBRARY[bo].bw });
+  const ts = (projText?.titleScale || 1) * (sceneText?.titleScale || 1);
+  const bs = (projText?.bodyScale || 1) * (sceneText?.bodyScale || 1);
+  return { F, ts, bs };
+}
+let TS = 1, BS = 1;
+const sz = (v, display = false) => v * (display ? TS : BS);
+
 export const AMBIANCES = {
   aurore: { label: 'Aurore', hint: 'Halos de couleur en mouvement' },
   trame: { label: 'Trame', hint: 'Halos et grille de points' },
@@ -105,6 +142,7 @@ function fit(S, text, { display = true, size, maxW, maxLines = 3, min = 0.3 }) {
   const { ctx, F } = S;
   const family = display ? F.display : F.body, weight = display ? F.dw : F.bw;
   const raw = (display && F.upper ? String(text || '').toUpperCase() : String(text || '')).trim();
+  size *= display ? TS : BS;
   let s = size;
   for (let k = 0; k < 40; k++) {
     setFont(ctx, family, weight, s); setTrack(ctx, display ? s * F.track : 0);
@@ -156,7 +194,7 @@ function kicker(S, text, x, y, { align = 'left', start = 0, color }) {
   const p = E.outCubic(prog(S.t, start, 0.6));
   if (p <= 0) return 64 * u;
   const size = 30 * u;
-  setFont(ctx, F.body, 700, size); setTrack(ctx, size * 0.18);
+  setFont(ctx, F.body, 700, sz(size)); setTrack(ctx, size * 0.18);
   ctx.save(); ctx.globalAlpha *= p; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
   const txt = String(text).toUpperCase();
   const w = ctx.measureText(txt).width;
@@ -491,7 +529,7 @@ export const SCENES = {
       const mp = E.outBack(prog(t, 0.05, 0.8));
       if (mp > 0) {
         ctx.save(); ctx.translate(P + markS * 0.22, y + markS * 0.3); ctx.scale(mp, mp);
-        setFont(ctx, 'Playfair Display', 700, markS); setTrack(ctx, 0); ctx.fillStyle = pal.accent; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        setFont(ctx, 'Playfair Display', 700, sz(markS)); setTrack(ctx, 0); ctx.fillStyle = pal.accent; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('“', 0, markS * 0.28); ctx.restore(); ctx.textBaseline = 'alphabetic';
       }
       y += markS * 0.55;
@@ -499,9 +537,9 @@ export const SCENES = {
       const ap = E.outCubic(prog(t, 0.6 + Q.lines.length * 0.14, 0.7));
       ctx.save(); ctx.globalAlpha *= ap; ctx.translate(0, (1 - ap) * 20 * u);
       ctx.fillStyle = pal.accent; ctx.fillRect(P, y + 8 * u, 50 * u, 4 * u);
-      setFont(ctx, F.body, 700, 42 * u); setTrack(ctx, 0); ctx.fillStyle = pal.fg; ctx.textAlign = 'left';
+      setFont(ctx, F.body, 700, sz(42 * u)); setTrack(ctx, 0); ctx.fillStyle = pal.fg; ctx.textAlign = 'left';
       ctx.fillText(p.author || '', P + 74 * u, y + 24 * u);
-      setFont(ctx, F.body, F.bw, 34 * u); ctx.fillStyle = pal.muted; ctx.fillText(p.role || '', P + 74 * u, y + 72 * u);
+      setFont(ctx, F.body, F.bw, sz(34 * u)); ctx.fillStyle = pal.muted; ctx.fillText(p.role || '', P + 74 * u, y + 72 * u);
       ctx.restore();
       const stars = +p.rating || 0;
       for (let i = 0; i < stars; i++) {
@@ -537,7 +575,7 @@ export const SCENES = {
       } else {
         ctx.strokeStyle = rgba(pal.fg, 0.35); ctx.lineWidth = 3 * u; ctx.setLineDash([16 * u, 12 * u]);
         rrect(ctx, W * 0.1, H * 0.1, W * 0.8, H * 0.8, 30 * u); ctx.stroke(); ctx.setLineDash([]);
-        setFont(ctx, S.F.body, 600, 38 * u); ctx.fillStyle = rgba(pal.fg, 0.6); ctx.textAlign = 'center';
+        setFont(ctx, S.F.body, 600, sz(38 * u)); ctx.fillStyle = rgba(pal.fg, 0.6); ctx.textAlign = 'center';
         ctx.fillText('Ajoute une image dans le panneau de droite', W / 2, H * 0.3);
       }
       if (!p.title && !p.subtitle) return;
@@ -584,10 +622,10 @@ export const SCENES = {
         rrect(ctx, x, baseY - h, bw, h, Math.min(16 * u, h / 2)); ctx.fill();
         if (gp > 0) {
           const nv = num(it.value);
-          setFont(ctx, F.display, F.dw, Math.min(56 * u, bw * 0.38)); setTrack(ctx, 0);
+          setFont(ctx, F.display, F.dw, sz(Math.min(56 * u, bw * 0.38), true)); setTrack(ctx, 0);
           ctx.fillStyle = pal.fg; ctx.textAlign = 'center'; ctx.globalAlpha = clamp(gp * 2);
           ctx.fillText(`${nv ? fmtNum(nv.val * gp, nv.dec) : it.value}${p.unit ? ` ${p.unit}` : ''}`, x + bw / 2, baseY - h - 18 * u);
-          setFont(ctx, F.body, 600, Math.min(34 * u, gap * 0.22)); ctx.fillStyle = pal.muted;
+          setFont(ctx, F.body, 600, sz(Math.min(34 * u, gap * 0.22))); ctx.fillStyle = pal.muted;
           ctx.fillText(it.label || '', x + bw / 2, baseY + 50 * u); ctx.globalAlpha = 1;
         }
       });
@@ -644,7 +682,7 @@ export const SCENES = {
       function stepDot(S2, x, y, rad, label, q) {
         const e = E.outBack(q); if (e <= 0) return;
         ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.arc(x, y, rad * e, 0, 6.283); ctx.fill();
-        setFont(ctx, F.display, F.dw, rad * 0.95 * e); setTrack(ctx, 0); ctx.fillStyle = onColor(pal.accent);
+        setFont(ctx, F.display, F.dw, sz(rad * 0.95 * e, true)); setTrack(ctx, 0); ctx.fillStyle = onColor(pal.accent);
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(label), x, y + rad * 0.04); ctx.textBaseline = 'alphabetic';
       }
     },
@@ -696,7 +734,7 @@ export const SCENES = {
       y += revealLines(S, T, x, y, { start: 0.35, color: pal.fg }) + 40 * u;
       if (p.oldPrice) {
         const op = E.outCubic(prog(t, 0.6, 0.5));
-        setFont(ctx, F.body, 600, 44 * u); setTrack(ctx, 0);
+        setFont(ctx, F.body, 600, sz(44 * u)); setTrack(ctx, 0);
         ctx.save(); ctx.globalAlpha *= op; ctx.fillStyle = pal.muted; ctx.textAlign = 'left'; ctx.fillText(p.oldPrice, x, y + 36 * u);
         const ow = ctx.measureText(p.oldPrice).width, sp = E.outExpo(prog(t, 0.9, 0.5));
         ctx.strokeStyle = S.b.colors.secondary; ctx.lineWidth = 5 * u; ctx.beginPath(); ctx.moveTo(x - 6 * u, y + 22 * u); ctx.lineTo(x - 6 * u + (ow + 12 * u) * sp, y + 18 * u); ctx.stroke();
@@ -706,7 +744,7 @@ export const SCENES = {
       if (pp > 0) {
         useFit(S, PR); const pw = ctx.measureText(PR.lines[0]).width;
         ctx.save(); ctx.translate(x, y + PR.size * 0.9); ctx.scale(pp, pp); ctx.fillStyle = pal.accent; ctx.textAlign = 'left'; ctx.fillText(PR.lines[0], 0, 0); ctx.restore();
-        if (p.unit) { setFont(ctx, F.body, 600, 40 * u); ctx.fillStyle = pal.muted; ctx.globalAlpha = clamp(pp); ctx.fillText(p.unit, x + pw + 16 * u, y + PR.size * 0.9); ctx.globalAlpha = 1; }
+        if (p.unit) { setFont(ctx, F.body, 600, sz(40 * u)); ctx.fillStyle = pal.muted; ctx.globalAlpha = clamp(pp); ctx.fillText(p.unit, x + pw + 16 * u, y + PR.size * 0.9); ctx.globalAlpha = 1; }
       }
       y += PR.size * 1.1 + 40 * u;
       rows.forEach((R, i) => {
@@ -753,7 +791,7 @@ export const SCENES = {
       if (!after) {
         ctx.strokeStyle = rgba(pal.fg, 0.35); ctx.lineWidth = 3 * u; ctx.setLineDash([16 * u, 12 * u]);
         rrect(ctx, W * 0.1, H * 0.1, W * 0.8, H * 0.8, 30 * u); ctx.stroke(); ctx.setLineDash([]);
-        setFont(ctx, F.body, 600, 38 * u); ctx.fillStyle = rgba(pal.fg, 0.6); ctx.textAlign = 'center';
+        setFont(ctx, F.body, 600, sz(38 * u)); ctx.fillStyle = rgba(pal.fg, 0.6); ctx.textAlign = 'center';
         ctx.fillText('Ajoute les photos avant et après', W / 2, H * 0.3);
         return;
       }
@@ -774,7 +812,7 @@ export const SCENES = {
       }
       const pill = (txt, x, y, align, q) => {
         if (!txt || q <= 0) return;
-        setFont(ctx, F.body, 800, 30 * u); setTrack(ctx, 3 * u);
+        setFont(ctx, F.body, 800, sz(30 * u)); setTrack(ctx, 3 * u);
         const tw = ctx.measureText(txt.toUpperCase()).width + 44 * u, bx = align === 'left' ? x : x - tw;
         ctx.save(); ctx.globalAlpha *= q; ctx.fillStyle = 'rgba(0,0,0,.6)'; rrect(ctx, bx, y, tw, 58 * u, 29 * u); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(txt.toUpperCase(), bx + 22 * u, y + 39 * u); ctx.restore(); setTrack(ctx, 0);
@@ -811,7 +849,7 @@ export const SCENES = {
       ctx.translate(ir.x + ir.w / 2, ir.y + ir.h / 2); ctx.scale(0.94 + 0.06 * ip, 0.94 + 0.06 * ip); ctx.translate(-(ir.x + ir.w / 2), -(ir.y + ir.h / 2));
       rrect(ctx, ir.x, ir.y, ir.w, ir.h, 30 * u); ctx.clip();
       if (img) coverDraw(ctx, img, ir.x, ir.y, ir.w, ir.h, 0.5, 1.03 + 0.07 * E.inOutCubic(clamp(t / d)));
-      else { ctx.fillStyle = mix(pal.base, pal.accent, 0.25); ctx.fillRect(ir.x, ir.y, ir.w, ir.h); setFont(ctx, F.body, 600, 32 * u); ctx.fillStyle = pal.muted; ctx.textAlign = 'center'; ctx.fillText('Ajoute une photo', ir.x + ir.w / 2, ir.y + ir.h / 2); }
+      else { ctx.fillStyle = mix(pal.base, pal.accent, 0.25); ctx.fillRect(ir.x, ir.y, ir.w, ir.h); setFont(ctx, F.body, 600, sz(32 * u)); ctx.fillStyle = pal.muted; ctx.textAlign = 'center'; ctx.fillText('Ajoute une photo', ir.x + ir.w / 2, ir.y + ir.h / 2); }
       ctx.restore();
       const cx = vertical ? P : ir.x + ir.w + P * 0.8, cw = vertical ? W - P * 2 : W - cx - P;
       const items = (p.items || []).filter((i) => i.value || i.label).slice(0, 4);
@@ -824,7 +862,7 @@ export const SCENES = {
       y += revealLines(S, T, cx, y, { start: 0.5, color: pal.fg });
       if (p.price) {
         const pp = E.outBack(prog(t, 0.95, 0.6));
-        setFont(ctx, F.display, F.dw, 70 * u); setTrack(ctx, 0);
+        setFont(ctx, F.display, F.dw, sz(70 * u, true)); setTrack(ctx, 0);
         ctx.save(); ctx.globalAlpha *= clamp(pp); ctx.fillStyle = pal.accent; ctx.textAlign = 'left'; ctx.fillText(p.price, cx, y + 80 * u); ctx.restore();
         y += 110 * u;
       } else y += 30 * u;
@@ -835,7 +873,7 @@ export const SCENES = {
         ctx.fillStyle = mix(pal.base, pal.fg, pal.dark ? 0.1 : 0.06); rrect(ctx, x, yy, cellW, cellH, 20 * u); ctx.fill();
         const V = fit(S, it.value || '', { size: 56 * u, maxW: cellW - 40 * u, maxLines: 1, min: 0.4 });
         useFit(S, V); ctx.fillStyle = pal.fg; ctx.textAlign = 'left'; ctx.fillText(V.lines[0], x + 22 * u, yy + 22 * u + V.size * 0.9);
-        setFont(ctx, F.body, 600, 28 * u); setTrack(ctx, 0); ctx.fillStyle = pal.muted; ctx.fillText(it.label || '', x + 22 * u, yy + cellH - 26 * u);
+        setFont(ctx, F.body, 600, sz(28 * u)); setTrack(ctx, 0); ctx.fillStyle = pal.muted; ctx.fillText(it.label || '', x + 22 * u, yy + cellH - 26 * u);
         ctx.restore();
       });
     },
@@ -871,12 +909,12 @@ export const SCENES = {
         ctx.fillStyle = '#FFFFFF'; rrect(ctx, 0, 0, cw, chh, 34 * u); ctx.fill(); ctx.shadowColor = 'transparent';
         ctx.save(); rrect(ctx, 0, 0, cw, chh, 34 * u); ctx.clip(); ctx.fillStyle = pal.accent; ctx.fillRect(0, 0, cw, chh * 0.27); ctx.restore();
         ctx.fillStyle = 'rgba(0,0,0,.25)'; for (const rx of [cw * 0.28, cw * 0.72]) { ctx.beginPath(); ctx.arc(rx, chh * 0.04, 12 * u, 0, 6.283); ctx.fill(); }
-        setFont(ctx, F.body, 800, 40 * u); setTrack(ctx, 6 * u); ctx.fillStyle = onColor(pal.accent); ctx.textAlign = 'center';
+        setFont(ctx, F.body, 800, sz(40 * u)); setTrack(ctx, 6 * u); ctx.fillStyle = onColor(pal.accent); ctx.textAlign = 'center';
         ctx.fillText((month || 'Agenda').toUpperCase(), cw / 2, chh * 0.18); setTrack(ctx, 0);
         const dn = E.outExpo(prog(t, 0.5, 0.9));
-        setFont(ctx, F.display, F.dw, 230 * u); ctx.fillStyle = '#16141F';
+        setFont(ctx, F.display, F.dw, sz(230 * u, true)); ctx.fillStyle = '#16141F';
         ctx.save(); ctx.globalAlpha *= dn; ctx.fillText(day || '★', cw / 2, chh * 0.74 + (1 - dn) * 30 * u); ctx.restore();
-        setFont(ctx, F.body, 700, 36 * u); ctx.fillStyle = '#6A6878'; ctx.fillText(wd ? wd.charAt(0).toUpperCase() + wd.slice(1) : '', cw / 2, chh * 0.9);
+        setFont(ctx, F.body, 700, sz(36 * u)); ctx.fillStyle = '#6A6878'; ctx.fillText(wd ? wd.charAt(0).toUpperCase() + wd.slice(1) : '', cw / 2, chh * 0.9);
         ctx.restore();
       }
       const tx = vertical ? P : cxp + cw + P * 0.9, tw = vertical ? W - P * 2 : W - tx - P;
@@ -889,7 +927,7 @@ export const SCENES = {
       y += revealLines(S, T, ax, y, { align: al, start: 0.6, color: pal.fg }) + 40 * u;
       rows.forEach(([icn, txt], i) => {
         const q = E.outCubic(prog(t, 1.2 + i * 0.2, 0.5)); if (q <= 0) return;
-        setFont(ctx, F.body, 600, 42 * u); setTrack(ctx, 0);
+        setFont(ctx, F.body, 600, sz(42 * u)); setTrack(ctx, 0);
         const w = ctx.measureText(txt).width + 64 * u, x0 = vertical ? W / 2 - w / 2 : tx;
         ctx.save(); ctx.globalAlpha *= q; ctx.translate((1 - q) * 30 * u, 0);
         const ix = x0 + 20 * u, iy = y + i * 70 * u + 22 * u;
@@ -904,7 +942,7 @@ export const SCENES = {
       if (p.button) {
         const bp = E.outBack(prog(t, 1.8, 0.6));
         if (bp > 0) {
-          setFont(ctx, F.body, 700, 40 * u); setTrack(ctx, 0);
+          setFont(ctx, F.body, 700, sz(40 * u)); setTrack(ctx, 0);
           const bw = ctx.measureText(p.button).width + 100 * u, bh = 96 * u, bx = vertical ? W / 2 : tx + bw / 2;
           ctx.save(); ctx.translate(bx, y + bh / 2); ctx.scale(bp, bp); ctx.fillStyle = pal.accent; rrect(ctx, -bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
           ctx.fillStyle = onColor(pal.accent); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(p.button, 0, 2 * u); ctx.restore(); ctx.textBaseline = 'alphabetic';
@@ -952,7 +990,7 @@ export const SCENES = {
       const realSrc = vid && vid.readyState >= 2 ? vid : photo;
       const badge = (x, y) => {
         if (!S.assets?.preview || !isPhoto || vid) return;
-        setFont(ctx, S.F.body, 700, 24 * u); setTrack(ctx, 0);
+        setFont(ctx, S.F.body, 700, sz(24 * u)); setTrack(ctx, 0);
         const txt = 'Aperçu : vidéo IA à générer', w = ctx.measureText(txt).width + 36 * u;
         ctx.fillStyle = 'rgba(0,0,0,.65)'; rrect(ctx, x, y, w, 46 * u, 23 * u); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(txt, x + 18 * u, y + 31 * u);
@@ -1082,7 +1120,7 @@ export const SCENES = {
       y += revealLines(S, T, cx, y, { align: 'center', start: 0.25, stagger: 0.12, color: pal.fg, lh: 1.06 });
       if (btnH) {
         y += 70 * u;
-        setFont(ctx, F.body, 700, 46 * u); setTrack(ctx, 0);
+        setFont(ctx, F.body, 700, sz(46 * u)); setTrack(ctx, 0);
         const bw = ctx.measureText(p.button).width + 120 * u;
         const bp = E.outBack(prog(t, 0.95, 0.7));
         if (bp > 0) {
@@ -1101,7 +1139,7 @@ export const SCENES = {
       }
       if (site) {
         const sp = E.outCubic(prog(t, 1.4, 0.7));
-        setFont(ctx, F.body, 600, 40 * u); setTrack(ctx, 2 * u);
+        setFont(ctx, F.body, 600, sz(40 * u)); setTrack(ctx, 2 * u);
         ctx.save(); ctx.globalAlpha *= sp; ctx.fillStyle = pal.fg; ctx.textAlign = 'center';
         ctx.fillText(site, cx, y + 70 * u + (1 - sp) * 16 * u); ctx.restore(); setTrack(ctx, 0);
       }
@@ -1384,18 +1422,20 @@ export function normBrand(b) {
   return B;
 }
 
-function drawScene(ctx, W, H, item, localT, brand, assets, globalT) {
+function drawScene(ctx, W, H, item, localT, brand, assets, globalT, projText) {
   const s = item.scene, def = SCENES[s.type];
   if (!def) return;
   const mode = s.bg && s.bg !== 'auto' ? s.bg : def.bg;
   const b = brand;
   const S = {
     ctx, W, H, u: Math.min(W, H) / 1080, t: localT, d: +s.duration || 4, T: globalT,
-    p: s.props || {}, b, F: FONTS[b.font] || FONTS.moderne, assets,
+    p: s.props || {}, b, F: null, assets,
     portrait: H > W * 1.15, square: Math.abs(W - H) / Math.max(W, H) < 0.22,
     pal: palette(b, mode), seed: hashStr(s.id || item.index),
   };
   S.accent = S.pal.accent;
+  const RT = resolveText(b, projText, s.text);
+  S.F = RT.F; TS = RT.ts; BS = RT.bs;
   ctx.save();
   paintBackground(S);
   def.draw(S);
@@ -1423,15 +1463,15 @@ export function renderFrame(ctx, W, H, project, brand, assets, time) {
   const active = items.filter((it) => t >= it.start && t < it.end);
   if (!active.length) active.push(items[items.length - 1]);
   if (active.length === 1) {
-    drawScene(ctx, W, H, active[0], t - active[0].start, B, assets, t);
+    drawScene(ctx, W, H, active[0], t - active[0].start, B, assets, t, project.text);
   } else {
     const [A, N] = active.slice(-2);
     const q = clamp((t - N.start) / (N.tr || TR));
     const e = E.inOutCubic(q);
     const buf = bufFor(ctx, W, H);
     const ca = buf.a.getContext('2d'), cb = buf.b.getContext('2d');
-    drawScene(ca, W, H, A, t - A.start, B, assets, t);
-    drawScene(cb, W, H, N, t - N.start, B, assets, t);
+    drawScene(ca, W, H, A, t - A.start, B, assets, t, project.text);
+    drawScene(cb, W, H, N, t - N.start, B, assets, t, project.text);
     const kind = N.scene.transition;
     ctx.save();
     if (kind === 'glisse') {
@@ -1464,7 +1504,16 @@ export function renderFrame(ctx, W, H, project, brand, assets, time) {
 /* ---------------------------------------------------------------
    Ressources : polices, logo, images
    --------------------------------------------------------------- */
-export async function ensureFonts(brand) {
+export function loadFont(family) {
+  const L0 = FONT_LIBRARY[family]; if (!L0) return Promise.resolve();
+  return Promise.all([document.fonts.load(`${L0.dw} 100px "${family}"`), document.fonts.load(`${L0.bw} 100px "${family}"`), document.fonts.load(`700 100px "${family}"`)].map((p) => p.catch(() => null)));
+}
+export async function ensureFonts(brand, project = null) {
+  if (project) {
+    const fams = new Set();
+    for (const tx of [project.text, ...(project.scenes || []).map((x) => x.text)]) { if (tx?.display) fams.add(tx.display); if (tx?.body) fams.add(tx.body); }
+    await Promise.all([...fams].map(loadFont));
+  }
   const F = FONTS[normBrand(brand).font];
   await Promise.all([
     document.fonts.load(`${F.dw} 100px "${F.display}"`), document.fonts.load(`${F.bw} 100px "${F.body}"`),
@@ -1532,7 +1581,7 @@ function loadVideo(id, loader) {
 /** opts : { media(id) → Promise<Blob>, preview: booléen } */
 export async function prepareAssets(project, brand, opts = {}) {
   const B = normBrand(brand);
-  await ensureFonts(B);
+  await ensureFonts(B, project);
   const images = {};
   const lib = project.assets || {};
   await Promise.all(Object.entries(lib).map(async ([id, src]) => { images[id] = await loadBitmap(src); }));

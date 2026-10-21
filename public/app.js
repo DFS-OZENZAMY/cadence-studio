@@ -1,7 +1,7 @@
 /* Cadence — application */
 import * as V from './engine.js';
 import { drawCharacter, SKINS, FURS, HAIR_COLORS, EYE_COLORS, OUTFIT_COLORS, OPTIONS, PRESETS, DEFAULT_CHAR, normChar, randomChar } from './avatar.js';
-const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND, DOMAINS } = V;
+const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND, DOMAINS, FONT_LIBRARY } = V;
 
 /* =========================================================
    Utilitaires
@@ -1122,8 +1122,9 @@ function renderFilm() {
 function drawClip(c, i) {
   const s = scenesOf()[i]; if (!s || !c) return;
   const hero = Math.min((+s.duration || 4) * 0.62, 2.6);
-  V.renderFrame(c.getContext('2d'), c.width, c.height, { scenes: [s], fadeOut: false, assets: P().data.assets }, ed.brand, ed.assets, hero);
+  V.renderFrame(c.getContext('2d'), c.width, c.height, { scenes: [s], fadeOut: false, assets: P().data.assets, text: P().data.text }, ed.brand, ed.assets, hero);
 }
+const redrawAllClips = debounce(() => { $$('.clip canvas').forEach((c, i) => drawClip(c, i)); }, 200);
 const redrawClip = debounce((i) => { const c = $(`.clip[data-i="${i}"] canvas`); if (c) drawClip(c, i); }, 250);
 
 /* ---------- Inspecteur ---------- */
@@ -1140,6 +1141,7 @@ function renderInspector() {
       <button class="icon-btn" data-ed="delScene" title="Supprimer (Suppr)" aria-label="Supprimer la scène">${ic('trash')}</button></div></div>
     ${def.fields.map((f) => fieldHtml(f, s.props)).join('')}
     ${aiVideoSection(s)}
+    ${textSection('scene', s)}
     <div class="insp-sec"><div class="label">Rythme et transition</div>
       <div class="field"><span>Durée</span><div class="range-row"><input type="range" min="1.5" max="${s.type === 'presentateur' ? 60 : 15}" step="0.5" value="${s.duration}" data-common="duration" aria-label="Durée en secondes"><output id="durOut">${(+s.duration).toFixed(1).replace('.', ',')} s</output></div></div>
       <label class="field"><span>Transition d’entrée</span><select data-common="transition" ${ed.sel === 0 ? 'disabled' : ''}>${Object.entries(TRANSITIONS).map(([k, l]) => `<option value="${k}" ${s.transition === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -1203,6 +1205,72 @@ function aiVideoSection(s) {
     ${state.ai.configured ? '' : '<span class="hint" style="color:var(--stage-muted)">Ajoute une clé fal.ai dans Réglages pour générer.</span>'}`;
   return `<div class="insp-sec"><div class="label">Vidéo IA de l’avatar</div>${body}</div>`;
 }
+/* ---------- Polices et tailles ---------- */
+function textTarget(scope) { return scope === 'scene' ? (curScene().text ||= {}) : (P().data.text ||= {}); }
+function textSection(scope, s = null) {
+  const own = scope === 'scene' ? (s.text || {}) : (P().data.text || {});
+  const eff = V.resolveText(ed.brand, P().data.text, scope === 'scene' ? s.text : {});
+  const inherited = scope === 'scene' ? V.resolveText(ed.brand, P().data.text, {}).F : V.resolveText(ed.brand, {}, {}).F;
+  const from = scope === 'scene' ? 'Comme la vidéo' : 'Selon la charte du client';
+  const fontBtn = (role) => {
+    const fam = role === 'display' ? eff.F.display : eff.F.body, isOwn = !!own[role];
+    return `<button class="font-btn" data-ed="pickFont" data-role="${role}" data-scope="${scope}"><b style="font-family:'${esc(fam)}';font-weight:${role === 'display' ? eff.F.dw : eff.F.bw}">${esc(fam)}</b><small>${isOwn ? 'Choisie pour ' + (scope === 'scene' ? 'cette scène' : 'la vidéo') : esc(from)}</small></button>`;
+  };
+  const range = (k, label) => {
+    const v = own[k] || 1;
+    return `<div class="field"><span>${label}</span><div class="range-row"><input type="range" min="0.5" max="1.8" step="0.05" value="${v}" data-textscale="${k}" data-scope="${scope}" aria-label="${label}"><output data-out="${scope}-${k}">${Math.round(v * 100)} %</output></div></div>`;
+  };
+  const changedAny = own.display || own.body || (own.titleScale && own.titleScale !== 1) || (own.bodyScale && own.bodyScale !== 1);
+  return `<div class="insp-sec"><div class="label" style="display:flex;justify-content:space-between;align-items:center">${scope === 'scene' ? 'Texte de cette scène' : 'Texte de toute la vidéo'}
+      ${changedAny ? `<button class="btn ghost" data-ed="resetText" data-scope="${scope}" style="height:26px;padding:0 8px;font-size:12px">Réinitialiser</button>` : ''}</div>
+    <div class="field"><span>Police des titres</span>${fontBtn('display')}</div>
+    ${range('titleScale', 'Taille des titres')}
+    <div class="field"><span>Police du texte</span>${fontBtn('body')}</div>
+    ${range('bodyScale', 'Taille du texte')}
+    ${scope === 'scene' ? '<p class="hint" style="color:var(--stage-muted)">Ces réglages s’ajoutent à ceux de l’onglet Vidéo. Les textes restent toujours dans le cadre : s’ils sont trop grands, ils passent à la ligne.</p>' : '<p class="hint" style="color:var(--stage-muted)">S’applique à toutes les scènes, sauf celles qui ont leurs propres réglages.</p>'}
+  </div>`;
+}
+function fontDialog({ role, scope }) {
+  const target = textTarget(scope);
+  const current = target[role] || null;
+  const inheritF = scope === 'scene' ? V.resolveText(ed.brand, P().data.text, {}).F : V.resolveText(ed.brand, {}, {}).F;
+  const inheritFam = role === 'display' ? inheritF.display : inheritF.body;
+  const sample = role === 'display' ? 'Votre titre ici' : 'Un texte clair et lisible, aux couleurs de votre marque.';
+  const cats = [...new Set(Object.values(FONT_LIBRARY).map((f) => f.cat))];
+  let cat = 'all';
+  const card = (fam, label, sub, selected) => {
+    const L0 = FONT_LIBRARY[fam] || { dw: 700, bw: 400 };
+    return `<button type="button" class="font-card" data-fam="${esc(label === null ? '' : fam)}" aria-pressed="${selected}">
+      <span class="font-sample" style="font-family:'${esc(fam)}';font-weight:${role === 'display' ? L0.dw : L0.bw};${L0.upper && role === 'display' ? 'text-transform:uppercase;' : ''}${role === 'display' ? 'font-size:30px' : 'font-size:16px'}">${esc(sample)}</span>
+      <span class="font-name">${esc(label ?? fam)}<small>${esc(sub)}</small></span></button>`;
+  };
+  const draw = () => {
+    $('#fontGrid').innerHTML = card(inheritFam, scope === 'scene' ? 'Comme la vidéo' : 'Selon la charte', inheritFam, !current)
+      + Object.entries(FONT_LIBRARY).filter(([, f]) => cat === 'all' || f.cat === cat).map(([fam, f]) => card(fam, undefined, f.cat, current === fam)).join('');
+  };
+  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>${role === 'display' ? 'Police des titres' : 'Police du texte'}</h2><p>${scope === 'scene' ? 'Pour cette scène uniquement.' : 'Pour toute la vidéo.'} Clique sur une police pour l’appliquer.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="chips" id="fontCats"><button type="button" class="chip on" data-cat="all">Toutes</button>${cats.map((c) => `<button type="button" class="chip" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+    <div class="font-grid" id="fontGrid"></div></div>`, {
+    size: 'wide',
+    onMount: (m) => {
+      draw();
+      Object.keys(FONT_LIBRARY).forEach((f) => V.loadFont(f));
+      $('#fontCats', m).addEventListener('click', (e) => { const b = e.target.closest('[data-cat]'); if (!b) return; cat = b.dataset.cat; $$('#fontCats .chip', m).forEach((x) => x.classList.toggle('on', x === b)); draw(); });
+      $('#fontGrid', m).addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-fam]'); if (!b || !ed) return;
+        const fam = b.dataset.fam || null;
+        beforeChange();
+        const t = textTarget(scope);
+        if (fam) t[role] = fam; else delete t[role];
+        closeModal();
+        if (fam) await V.loadFont(fam);
+        if (!ed) return;
+        changed(scope === 'scene' ? { clip: ed.sel, inspector: true } : { film: true, inspector: true });
+        toast(fam ? `Police ${fam} appliquée` : 'Police par défaut rétablie', 'ok');
+      });
+    },
+  });
+}
 function hydrateInspector() {
   const brand = ed.brand;
   $$('#inspector canvas[data-av]').forEach((c) => {
@@ -1220,6 +1288,7 @@ function videoPanel() {
         <span class="swatches">${['primary', 'secondary', 'dark', 'light'].map((k) => `<i style="background:${esc(ed.brand.colors[k])}"></i>`).join('')}</span>
         <span style="flex:1;font-weight:700">${esc(c ? c.name : 'Démonstration')}</span>
         ${c ? `<button class="btn ghost" data-ed="editBrand">${ic('edit')}Modifier</button>` : `<button class="btn ghost" data-ed="newBrand">${ic('plus')}Créer</button>`}</div></div>
+    ${textSection('video')}
     <label class="switch"><input type="checkbox" data-video="fadeIn" ${p.data.fadeIn ? 'checked' : ''}>Fondu au noir en ouverture</label>
     <label class="switch"><input type="checkbox" data-video="fadeOut" ${p.data.fadeOut !== false ? 'checked' : ''}>Fondu au noir en fin de vidéo</label>
     <div class="insp-sec"><div class="label">Raccourcis clavier</div>
@@ -1398,12 +1467,28 @@ function onEdClick(e) {
     confirmBox({ title: 'Générer la vidéo réaliste ?', text: `La photo de ${s.props.avatar?.name || 'l’avatar'} va être animée sur ${vo.duration.toFixed(1).replace('.', ',')} s de voix. Coût estimé : ${fmtUsd(cost)}, facturé par fal.ai.`, ok: `Générer pour ${fmtUsd(cost)}` })
       .then((ok) => { if (ok) startJob(s, 'videoJob', { model, imageMedia: s.props.avatar.photo, audioMedia: s.props.voice, duration: vo.duration, key: videoKey(s.props) }); });
   }
+  else if (a === 'pickFont') fontDialog({ role: b.dataset.role, scope: b.dataset.scope });
+  else if (a === 'resetText') {
+    beforeChange();
+    if (b.dataset.scope === 'scene') delete curScene().text; else delete P().data.text;
+    changed(b.dataset.scope === 'scene' ? { clip: ed.sel, inspector: true } : { film: true, inspector: true });
+  }
   else if (a === 'editBrand') brandDialog(P().clientId);
   else if (a === 'newBrand') brandDialog();
 }
 function onInspector(e) {
   const el = e.target, s = curScene();
   if (el.dataset.ttsVoice !== undefined) { if (s) { s.props.ttsVoice = el.value; changed(); } return; }
+  if (el.dataset.textscale) {
+    if (e.type === 'change') return;
+    const sc = el.dataset.scope; if (sc === 'scene' && !s) return;
+    beforeChange();
+    const t = textTarget(sc), v = Math.round(+el.value * 100) / 100;
+    if (v === 1) delete t[el.dataset.textscale]; else t[el.dataset.textscale] = v;
+    const o = $(`[data-out="${sc}-${el.dataset.textscale}"]`); if (o) o.textContent = `${Math.round(v * 100)} %`;
+    if (sc === 'scene') changed({ clip: ed.sel }); else { ed.dirty = true; redrawAllClips(); setStatus('saving'); ed.save(); }
+    return;
+  }
   if (el.dataset.video) { beforeChange(); P().data[el.dataset.video] = el.checked; changed(); return; }
   if (!s) return;
   if (el.dataset.k && el.type !== 'file') {
