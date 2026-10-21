@@ -660,3 +660,5 @@ dialog[open] { animation: pop .18s ease-out; }
 .pbtn.stop { background: #E5484D; }
 .pbtn .ic { width: 15px; height: 15px; }
 .pip-bar.paused .rec-dot { animation: none; background: #F2B54A; }
+
+.rec-hud[hidden] { display: none !important; }

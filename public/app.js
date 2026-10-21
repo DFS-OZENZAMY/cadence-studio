@@ -1004,6 +1004,7 @@ function recordingHud() {
   hud.innerHTML = `<span class="rec-dot"></span><b id="recTime">00:00</b><span class="rec-lvl"><i id="recLvl"></i></span>
     <button class="btn" id="recPause">${ic('pause')}Pause</button><button class="btn rec" id="recStop">${ic('stop')}Terminer</button><button class="icon-btn" id="recCancel" title="Abandonner" aria-label="Abandonner">${ic('trash')}</button>
     ${window.documentPictureInPicture ? `<button class="icon-btn" id="recPip" title="Contrôles flottants, visibles par-dessus les autres fenêtres" aria-label="Contrôles flottants">${ic('layers')}</button>` : ''}`;
+  if (window.documentPictureInPicture) hud.hidden = true;
   document.body.append(hud);
   let timer = 0;
   const upd = () => {
@@ -1051,8 +1052,10 @@ function recordingHud() {
       w.document.getElementById('recStop').onclick = () => finish(true);
       w.document.getElementById('recCancel').onclick = () => finish(false);
       w.document.getElementById('recPip')?.remove();
-      w.addEventListener('pagehide', () => { pipWin = null; });
-    }).catch(() => {});
+      hud.hidden = true;
+      // Fenêtre fermée par erreur : la barre centrale revient pour garder la main
+      w.addEventListener('pagehide', () => { pipWin = null; if (recCtl && document.body.contains(hud)) { hud.hidden = false; toast('Fenêtre flottante fermée : l’enregistrement continue. Utilise la barre en bas de Cadence, ou rouvre la bulle.'); } });
+    }).catch(() => { hud.hidden = false; });
   };
   hud.querySelector('#recPip')?.addEventListener('click', openPip);
   openPip();
