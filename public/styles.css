@@ -684,3 +684,26 @@ dialog[open] { animation: pop .18s ease-out; }
 .gest-chip { height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--stage-line, var(--line)); background: var(--stage-2, var(--surface-2)); color: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; }
 .gest-chip:hover { border-color: #8B76FF; color: #8B76FF; }
 .dlg .gest-pal .hint { color: var(--muted); }
+
+/* ---------- Responsive : badges, zones sûres, tous les formats ---------- */
+.fmt-badge { display: flex; align-items: flex-start; gap: 8px; padding: 9px 10px; border-radius: 10px; font-size: 12px; line-height: 1.4; background: var(--stage-2); color: var(--stage-muted); flex-wrap: wrap; }
+.fmt-badge .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+.fmt-badge span { flex: 1; min-width: 160px; }
+.fmt-badge.auto { color: #B9AEFF; background: #1F1B33; }
+.fmt-badge.manuel { color: #F2C46B; background: #2E2614; }
+.fmt-badge .btn { height: 26px; font-size: 12px; padding: 0 8px; }
+.safe-btn { background: rgba(24,24,31,.85) !important; color: #fff !important; border: 1px solid #3a3a46 !important; }
+.safe-btn.on { border-color: #FF6BB5 !important; color: #FF9ACD !important; }
+.safe-z { position: absolute; background: repeating-linear-gradient(45deg, rgba(255,107,181,.18) 0 8px, rgba(255,107,181,.08) 8px 16px); border: 1px dashed rgba(255,107,181,.7); display: grid; place-items: center; }
+.safe-z span { font: 700 10.5px/1.2 var(--body, system-ui); color: #fff; background: rgba(0,0,0,.55); padding: 3px 6px; border-radius: 5px; text-align: center; }
+.safe-z.top { left: 0; right: 0; top: 0; height: 7%; }
+.safe-z.bottom { left: 0; right: 0; bottom: 0; height: 16%; }
+.safe-z.right { right: 0; top: 40%; height: 44%; width: 13%; }
+.fmt-grid { display: grid; grid-template-columns: 1.78fr 0.56fr 1fr 0.8fr; gap: 12px; align-items: end; }
+@media (max-width: 760px) { .fmt-grid { grid-template-columns: 1fr 1fr; } }
+.fmt-card { display: grid; gap: 4px; justify-items: start; padding: 8px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); text-align: left; cursor: pointer; }
+.fmt-card canvas { width: 100%; height: auto; border-radius: 8px; background: #000; }
+.fmt-card small { color: var(--muted); font-size: 11px; line-height: 1.3; }
+.fmt-card.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.fmt-card:hover { border-color: var(--accent); }
+.safe-z.right span { writing-mode: vertical-rl; }

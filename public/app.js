@@ -1430,6 +1430,7 @@ async function openEditor(id) {
   try { p = await api(`/api/projects/${id}`); } catch (e) { toast(e.message, 'error'); location.hash = '#/projets'; return; }
   p.data.scenes ||= []; p.data.assets ||= {};
   p.data.scenes.forEach((s) => { s.id ||= uid(); });
+  for (const el of [...p.data.scenes.flatMap((s) => s.elements || []), ...(p.data.globals || [])]) el.srcFmt ||= p.format || '16:9';
   ed = {
     id, project: p, brand: brandOf(p.clientId), assets: { logo: null, images: {} },
     time: 0, playing: false, loop: true, sel: 0, tab: 'scene', raf: 0, last: 0, dirty: true,
@@ -1476,11 +1477,12 @@ function renderEditor() {
       <button class="icon-btn hide-sm" data-ed="undo" title="Annuler (Ctrl+Z)" aria-label="Annuler">${ic('undo')}</button>
       <button class="icon-btn hide-sm" data-ed="redo" title="Rétablir (Ctrl+Maj+Z)" aria-label="Rétablir">${ic('redo')}</button>
       <div class="segmented" role="group" aria-label="Format">${Object.keys(FORMATS).map((k) => `<button data-ed="format" data-f="${k}" aria-pressed="${p.format === k}" title="${esc(FORMATS[k].hint)}">${k}</button>`).join('')}</div>
+      <button class="icon-btn" data-ed="allFormats" title="Voir la vidéo dans tous les formats" aria-label="Voir tous les formats">${ic('layers')}</button>
       <button class="btn rec" data-ed="export" title="Exporter en MP4 (Ctrl+E)">${ic('rec')}Exporter</button>
     </header>
     <div class="ed-main">
       <div class="ed-center">
-        <div class="ed-stage" id="edStage"><div class="stage-tools"><button class="btn primary" data-ed="addElement" data-scope="scene">${ic('plus')}Ajouter un élément</button></div>
+        <div class="ed-stage" id="edStage"><div class="stage-tools"><button class="btn primary" data-ed="addElement" data-scope="scene">${ic('plus')}Ajouter un élément</button><button class="btn safe-btn ${ed.showSafe ? 'on' : ''}" data-ed="safeZones" title="Zones recouvertes par TikTok, Reels et Shorts" ${p.format === '9:16' ? '' : 'hidden'}>Zones sûres</button></div>
           <div class="canvas-wrap" id="canvasWrap"><canvas id="edCanvas"></canvas><div class="sel-layer" id="selLayer"></div></div></div>
         <div class="ed-transport">
           <button class="icon-btn" data-ed="toStart" title="Revenir au début (Début)" aria-label="Revenir au début">${ic('start')}</button>
@@ -2285,8 +2287,11 @@ function elementPanel() {
     <div class="insp-sec"><div class="label">Position et taille</div>
       <div class="pos-grid">${posBtns.map(([x, y]) => `<button data-ed="elPos" data-x="${x}" data-y="${y}" aria-label="Placer"></button>`).join('')}</div>
       ${['image', 'video', 'avatar', 'shape'].includes(el.type) ? `<button class="btn" data-ed="elFull" style="justify-self:start">Plein cadre</button>` : ''}
-      ${rng('x', 'Horizontal', el.x ?? 0.5, -0.2, 1.2, 0.005, pct)}${rng('y', 'Vertical', el.y ?? 0.5, -0.2, 1.2, 0.005, pct)}
-      ${rng('w', 'Largeur', el.w || 0.3, 0.03, 1.5, 0.005, pct)}${rng('rot', 'Rotation', el.rot || 0, -180, 180, 1, (v) => `${v}°`)}${rng('opacity', 'Opacité', el.opacity ?? 1, 0, 1, 0.05, pct)}
+      ${(() => { const g = effGeom(el), f = curFmt();
+        return `<div class="fmt-badge ${g.mode}">${g.mode === 'origine' ? `${ic('check')}<span>Disposition d’origine (${esc(el.srcFmt || f)}). Les autres formats s’adaptent automatiquement.</span>`
+          : g.mode === 'manuel' ? `${ic('edit')}<span>Réglé à la main pour le ${esc(f)}. Les autres formats ne changent pas.</span><button class="btn ghost" data-ed="elAuto">Revenir à l’automatique</button>`
+          : `${ic('spark')}<span>Adapté automatiquement au ${esc(f)}. Déplace-le pour l’ajuster : ce réglage ne vaudra que pour ce format.</span>`}</div>
+        ${rng('x', 'Horizontal', g.x, -0.2, 1.2, 0.005, pct)}${rng('y', 'Vertical', g.y, -0.2, 1.2, 0.005, pct)}${rng('w', 'Largeur', g.w, 0.03, 1.5, 0.005, pct)}`; })()}${rng('rot', 'Rotation', el.rot || 0, -180, 180, 1, (v) => `${v}°`)}${rng('opacity', 'Opacité', el.opacity ?? 1, 0, 1, 0.05, pct)}
       <p class="hint" style="color:var(--stage-muted)">Tu peux aussi déplacer l’élément directement sur l’image et le redimensionner avec la poignée.</p></div>
     <div class="insp-sec"><div class="label">Apparition</div>
       ${rng('start', 'Début', el.start || 0, 0, Math.max(0.1, D - 0.1), 0.05, sec)}${rng('end', 'Fin', el.end ?? D, 0.1, D, 0.05, sec)}
@@ -2313,13 +2318,17 @@ function elementPanel() {
 /* ---------- Canevas : sélection, déplacement, redimensionnement ---------- */
 function canvasScale() { const c = $('#edCanvas'); return c ? c.clientWidth / c.width : 1; }
 function allHits() { return [...(ed.hits?.globals || []).map((h) => ({ ...h, scope: 'global' })), ...[...(ed.hits || [])].reverse().map((h) => ({ ...h, scope: 'scene' }))]; }
+function safeZonesHtml() {
+  if (!ed?.showSafe || curFmt() !== '9:16') return '';
+  return '<div class="safe-z top"><span>Barre de l’application</span></div><div class="safe-z bottom"><span>Légende, nom du compte, musique</span></div><div class="safe-z right"><span>Boutons</span></div>';
+}
 function drawSelection() {
   const layer = $('#selLayer'); if (!layer || !ed) return;
   const el = selElement();
   const h = el && (ed.selEl.scope === 'global' ? ed.hits?.globals : ed.hits)?.find((x) => x.id === el.id);
-  if (!h) { layer.innerHTML = ed.guides ? ed.guides : ''; return; }
+  if (!h) { layer.innerHTML = (ed.guides || '') + safeZonesHtml(); return; }
   const k = canvasScale();
-  layer.innerHTML = `${ed.guides || ''}<div class="sel-box ${el.locked ? 'locked' : ''}" style="left:${h.x * k}px;top:${h.y * k}px;width:${h.w * k}px;height:${h.h * k}px;transform:rotate(${h.rot}deg)">
+  layer.innerHTML = `${ed.guides || ''}${safeZonesHtml()}<div class="sel-box ${el.locked ? 'locked' : ''}" style="left:${h.x * k}px;top:${h.y * k}px;width:${h.w * k}px;height:${h.h * k}px;transform:rotate(${h.rot}deg)">
     ${el.locked ? '' : '<span class="sel-handle" data-handle="1"></span>'}<span class="sel-tag">${esc(elLabel(el))}</span></div>`;
 }
 function bindCanvas() {
@@ -2331,7 +2340,7 @@ function bindCanvas() {
     const c = $('#edCanvas'); const W = c.width, H = c.height;
     const cur = selElement();
     if (e.target.dataset.handle && cur) {
-      beforeChange(); drag = { mode: 'resize', el: cur, w0: cur.w, x0: e.clientX, W, k };
+      beforeChange(); const gr = geomTarget(cur); drag = { mode: 'resize', el: gr, w0: gr.w, x0: e.clientX, W, k };
       wrap.setPointerCapture(e.pointerId); e.preventDefault(); return;
     }
     const hit = allHits().find((h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h);
@@ -2339,7 +2348,8 @@ function bindCanvas() {
     if (ed.selEl?.id !== hit.id) { setPlaying(false); selectEl(hit.scope, hit.id); }
     const el = selElement(); if (!el || el.locked) return;
     beforeChange();
-    drag = { mode: 'move', el, sx: e.clientX, sy: e.clientY, x0: el.x ?? 0.5, y0: el.y ?? 0.5, W, H, k };
+    const gm = geomTarget(el);
+    drag = { mode: 'move', el: gm, sx: e.clientX, sy: e.clientY, x0: gm.x ?? 0.5, y0: gm.y ?? 0.5, W, H, k };
     wrap.setPointerCapture(e.pointerId); e.preventDefault();
   });
   wrap.addEventListener('pointermove', (e) => {
@@ -2364,6 +2374,30 @@ function bindCanvas() {
   };
   wrap.addEventListener('pointerup', end); wrap.addEventListener('pointercancel', end);
   wrap.addEventListener('dblclick', () => { const el = selElement(); if (el?.type === 'text') setTimeout(() => $('#inspector textarea[data-elk="text"]')?.focus(), 30); });
+}
+
+/* ---------- Aperçu de tous les formats ---------- */
+function allFormatsDialog() {
+  setPlaying(false);
+  const proj = projForRender(), total = V.timeline(proj).total;
+  let t = ed.time, playing = false, raf = 0, last = 0;
+  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Tous les formats</h2><p>La même vidéo, réorganisée automatiquement pour chaque écran. Clique un format pour l’ouvrir dans l’éditeur et l’ajuster.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="fmt-grid">${Object.entries(FORMATS).map(([k, f]) => `<button class="fmt-card ${k === curFmt() ? 'on' : ''}" data-pick-fmt="${k}"><canvas data-fmt="${k}" width="${Math.round(f.w / 3)}" height="${Math.round(f.h / 3)}"></canvas><b>${k}</b><small>${esc(f.hint)}</small></button>`).join('')}</div>
+    <div class="row" style="gap:10px"><button class="btn" id="afPlay">${ic('play')}Lecture</button><input type="range" id="afTime" min="0" max="${total.toFixed(2)}" step="0.01" value="${t}" style="flex:1"><span class="hint" id="afTc"></span></div></div>`, {
+    size: 'wide',
+    onClose: () => cancelAnimationFrame(raf),
+    onMount: (m) => {
+      const draw = () => {
+        for (const c of $$('canvas[data-fmt]', m)) V.renderFrame(c.getContext('2d'), c.width, c.height, proj, ed.brand, ed.assets, t);
+        $('#afTime', m).value = t; $('#afTc', m).textContent = `${fmtTime(t).slice(0, 5)} / ${fmtTime(total).slice(0, 5)}`;
+      };
+      const loop = (now) => { if (!playing) return; t += Math.min(0.1, (now - (last || now)) / 1000); last = now; if (t >= total) t = 0; draw(); raf = requestAnimationFrame(loop); };
+      $('#afPlay', m).onclick = () => { playing = !playing; last = 0; $('#afPlay', m).innerHTML = playing ? `${ic('pause')}Pause` : `${ic('play')}Lecture`; if (playing) raf = requestAnimationFrame(loop); };
+      $('#afTime', m).oninput = (e) => { t = +e.target.value; draw(); };
+      m.querySelector('.fmt-grid').addEventListener('click', (e) => { const b = e.target.closest('[data-pick-fmt]'); if (!b) return; closeModal(); $(`[data-ed="format"][data-f="${b.dataset.pickFmt}"]`)?.click(); });
+      draw();
+    },
+  });
 }
 
 /* ---------- Pistes de la scène ---------- */
@@ -2482,6 +2516,7 @@ function addElementDialog(scope = 'scene') {
 function insertElement(scope, el) {
   if (!el) return;
   beforeChange();
+  el.srcFmt = P().format || '16:9'; delete el.fmt;
   if (scope === 'global') { el.start = 0; el.end = null; }
   elList(scope).push(el);
   closeModal();
@@ -2519,6 +2554,22 @@ async function pickElementMedia(kind, existing = null) {
     if (existing) return { media, natAr: ar, ar };
     return V.newElement('image', { media, ar, natAr: ar, fit: 'cover' });
   } catch (e) { console.error(e); toast(kind === 'video' ? 'Vidéo illisible dans ce navigateur. Essaie un MP4 (H.264).' : 'Image illisible.', 'error'); return null; }
+}
+/* Responsive : la position d'un élément se règle par format */
+const curFmt = () => P().format || '16:9';
+function effGeom(el) {
+  const f = curFmt(), o = el.fmt?.[f];
+  if ((el.srcFmt || f) === f) return { x: el.x ?? 0.5, y: el.y ?? 0.5, w: el.w || 0.3, mode: 'origine' };
+  if (o) return { x: o.x, y: o.y, w: o.w, mode: 'manuel' };
+  const l = V.lastLayout().get(el.id);
+  return { x: l?.x ?? el.x ?? 0.5, y: l?.y ?? el.y ?? 0.5, w: l?.w ?? el.w ?? 0.3, ar: l?.ar, sizeK: l?.sizeK, mode: 'auto' };
+}
+function geomTarget(el) {
+  const f = curFmt();
+  if ((el.srcFmt || f) === f) return el;
+  el.fmt ||= {};
+  if (!el.fmt[f]) { const g = effGeom(el); el.fmt[f] = { x: g.x, y: g.y, w: g.w, ...(g.ar ? { ar: g.ar } : {}), ...(g.sizeK && g.sizeK !== 1 ? { sizeK: g.sizeK } : {}) }; }
+  return el.fmt[f];
 }
 function setPath(o, path, v) { const ks = path.split('.'); let x = o; for (let i = 0; i < ks.length - 1; i++) x = x[ks[i]] ||= {}; x[ks[ks.length - 1]] = v; }
 
@@ -2670,6 +2721,9 @@ function videoPanel() {
         <span style="flex:1;font-weight:700">${esc(c ? c.name : 'Démonstration')}</span>
         ${c ? `<button class="btn ghost" data-ed="editBrand">${ic('edit')}Modifier</button>` : `<button class="btn ghost" data-ed="newBrand">${ic('plus')}Créer</button>`}</div></div>
     ${elementsList('global')}
+    <div class="insp-sec"><div class="label">Formats et responsive</div>
+      <p class="hint" style="color:var(--stage-muted)">Ta vidéo se réorganise toute seule dans chaque format : colonnes empilées en vertical, éléments gardés dans leurs coins, rien de coupé ni de superposé. Tes réglages à la main ne valent que pour le format où tu les fais.</p>
+      <div class="row" style="flex-wrap:wrap"><button class="btn" data-ed="allFormats">${ic('layers')}Voir tous les formats</button><button class="btn ghost" data-ed="resetFmt">Tout réadapter en ${esc(P().format || '16:9')}</button></div></div>
     <div class="insp-sec"><div class="label">Sound design</div><button class="btn" data-ed="autoSfx" style="justify-self:start">${ic('speaker')}Ajouter les bruitages automatiquement</button>
       <p class="hint" style="color:var(--stage-muted)">Ajoute un son adapté à chaque élément animé qui n’en a pas encore (pop, whoosh, clic…). Tout reste modifiable.</p></div>
     ${musicSection()}
@@ -2793,7 +2847,7 @@ function onEdClick(e) {
   const setb = e.target.closest('[data-elset]');
   if (setb) {
     const it = selElement(); if (!it) return;
-    beforeChange(); const k = setb.dataset.elset; setPath(it, k, setb.dataset.num ? +setb.dataset.v : setb.dataset.v);
+    beforeChange(); const k = setb.dataset.elset; setPath(k === 'ar' ? geomTarget(it) : it, k, setb.dataset.num ? +setb.dataset.v : setb.dataset.v);
     changed({ clip: ed.sel, inspector: true }); return;
   }
   const b = e.target.closest('[data-ed]'); if (!b) return;
@@ -2808,7 +2862,9 @@ function onEdClick(e) {
     if (P().format === b.dataset.f) return;
     beforeChange(); P().format = b.dataset.f;
     $$('[data-ed="format"]').forEach((x) => x.setAttribute('aria-pressed', x === b));
-    ed.lastThumb = 0; fitCanvas(); changed({ film: true });
+    ed.lastThumb = 0; fitCanvas(); changed({ film: true, inspector: true });
+    const sb = $('.safe-btn'); if (sb) sb.hidden = b.dataset.f !== '9:16';
+    if (V.allElements(projForRender()).length) toast(`Mise en page réorganisée pour le ${b.dataset.f}. Tes ajustements dans ce format ne toucheront pas les autres.`);
   }
   else if (a === 'export') exportDialog();
   else if (a === 'addScene') sceneDialog();
@@ -2891,8 +2947,16 @@ function onEdClick(e) {
   else if (a === 'elHide' || a === 'elLock') { e.stopPropagation(); const el = elList(b.dataset.scope).find((x) => x.id === b.dataset.id); if (!el) return; beforeChange(); if (a === 'elHide') el.hidden = !el.hidden; else el.locked = !el.locked; changed({ clip: ed.sel, inspector: true }); renderTracks(); }
   else if (a === 'elDel') { const list = elList(ed.selEl.scope), i = list.findIndex((x) => x.id === ed.selEl.id); if (i < 0) return; beforeChange(); list.splice(i, 1); ed.selEl = null; changed({ clip: ed.sel, film: true, inspector: true }); renderTracks(); toast('Élément supprimé. Ctrl+Z pour annuler.'); }
   else if (a === 'elDup') { const el = selElement(); if (!el) return; beforeChange(); const c = structuredClone(el); c.id = V.newElement(el.type).id; c.x = Math.min(1, (c.x ?? 0.5) + 0.03); c.y = Math.min(1, (c.y ?? 0.5) + 0.03); elList(ed.selEl.scope).push(c); ed.selEl = { scope: ed.selEl.scope, id: c.id }; changed({ clip: ed.sel, inspector: true }); renderTracks(); }
-  else if (a === 'elPos') { const el = selElement(); if (!el) return; beforeChange(); el.x = +b.dataset.x; el.y = +b.dataset.y; changed({ clip: ed.sel, inspector: true }); }
-  else if (a === 'elFull') { const el = selElement(); if (!el) return; beforeChange(); const c = $('#edCanvas'); el.x = 0.5; el.y = 0.5; el.w = 1; el.rot = 0; if (el.type === 'image' || el.type === 'video' || el.type === 'shape') { el.ar = c.height / c.width; el.radius = 0; if (el.type === 'shape') el.kind = 'rect'; } if (el.type === 'avatar') { el.w = 0.75; el.y = 0.55; } changed({ clip: ed.sel, inspector: true }); }
+  else if (a === 'elPos') { const el = selElement(); if (!el) return; beforeChange(); const g = geomTarget(el); g.x = +b.dataset.x; g.y = +b.dataset.y; changed({ clip: ed.sel, inspector: true }); }
+  else if (a === 'elAuto') { const el = selElement(); if (!el?.fmt) return; beforeChange(); delete el.fmt[curFmt()]; changed({ clip: ed.sel, inspector: true }); toast('Adaptation automatique rétablie pour ce format', 'ok'); }
+  else if (a === 'resetFmt') {
+    beforeChange(); let n = 0;
+    for (const { el } of V.allElements(projForRender())) if (el.fmt?.[curFmt()]) { delete el.fmt[curFmt()]; n++; }
+    changed({ film: true, inspector: true }); toast(n ? `${plural(n, 'réglage manuel retiré', 'réglages manuels retirés')} : tout est adapté automatiquement en ${curFmt()}` : `Rien à rétablir : tout est déjà automatique en ${curFmt()}`, n ? 'ok' : '');
+  }
+  else if (a === 'allFormats') allFormatsDialog();
+  else if (a === 'safeZones') { ed.showSafe = !ed.showSafe; b.classList.toggle('on', ed.showSafe); drawSelection(); }
+  else if (a === 'elFull') { const el = selElement(); if (!el) return; beforeChange(); const c = $('#edCanvas'), g = geomTarget(el); g.x = 0.5; g.y = 0.5; g.w = 1; el.rot = 0; if (el.type === 'image' || el.type === 'video' || el.type === 'shape') { g.ar = c.height / c.width; if (g === el) el.ar = g.ar; el.radius = 0; if (el.type === 'shape') el.kind = 'rect'; } if (el.type === 'avatar') { g.w = 0.75; g.y = 0.55; } changed({ clip: ed.sel, inspector: true }); }
   else if (a === 'elReplay') { const el = selElement(); if (!el) return; const it = V.timeline(projForRender()).items[ed.sel]; const base = ed.selEl.scope === 'global' ? 0 : it.start; seek(Math.max(0, base + (+el.start || 0) - 0.05)); setPlaying(true); }
   else if (a === 'elAvatar') { const el = selElement(); if (!el) return; beforeChange(); el.avatar = b.dataset.id ? avatarData(state.avatars.find((x) => x.id === b.dataset.id)) : null; changed({ clip: ed.sel, inspector: true }); }
   else if (a === 'replaceMedia') { const el = selElement(); if (!el) return; pickElementMedia(el.type, el).then((props) => { if (!props || !ed) return; beforeChange(); Object.assign(el, props); reloadAssets().then(() => changed({ clip: ed.sel, inspector: true })); }); }
@@ -2969,7 +3033,7 @@ function onInspector(e) {
     if (k === 'weight' || k === 'speed') v = +v;
     if (el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'color') { if (e.type !== 'change' && el.type !== 'color') return; }
     else if (e.type === 'change' && el.tagName !== 'TEXTAREA') { renderTracks(); return; }
-    beforeChange(); setPath(it, k, v);
+    beforeChange(); setPath(['x', 'y', 'w'].includes(k) ? geomTarget(it) : it, k, v);
     const o = $(`[data-elout="${k}"]`); if (o) { const fmts = { size: (x) => `${x} px`, rot: (x) => `${x}°`, spacing: (x) => `${x}`, lineHeight: (x) => (+x).toFixed(2), radius: (x) => `${x}`, ar: (x) => (+x).toFixed(2) }; o.textContent = fmts[k] ? fmts[k](v) : /start|end|Dur|Delay|trim/.test(k) ? sec(v ?? scopeDur(ed.selEl.scope)) : pct(v); }
     if (k === 'font' && FONT_LIBRARY[v]) V.loadFont(v).then(() => { if (ed) ed.dirty = true; });
     const structural = el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'color';
@@ -3055,8 +3119,8 @@ function onEdKey(e) {
     if (e.key === 'Escape') { selectEl(null, null); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); $('[data-ed="elDel"]')?.click(); return; }
     if (e.key.startsWith('Arrow') && !it.locked) {
-      e.preventDefault(); beforeChange(); const st = e.shiftKey ? 0.02 : 0.004;
-      if (e.key === 'ArrowLeft') it.x -= st; if (e.key === 'ArrowRight') it.x += st; if (e.key === 'ArrowUp') it.y -= st; if (e.key === 'ArrowDown') it.y += st;
+      e.preventDefault(); beforeChange(); const st = e.shiftKey ? 0.02 : 0.004, g = geomTarget(it);
+      if (e.key === 'ArrowLeft') g.x -= st; if (e.key === 'ArrowRight') g.x += st; if (e.key === 'ArrowUp') g.y -= st; if (e.key === 'ArrowDown') g.y += st;
       changed({ clip: ed.sel }); return;
     }
   }

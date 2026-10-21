@@ -1643,6 +1643,148 @@ function animState(S, el, lt, d, bw, bh, cx, cy) {
   return st;
 }
 
+
+/* ---------------------------------------------------------------
+   Mise en page responsive : réorganise les éléments d'un format à l'autre
+   (ancrages aux bords, taille réelle conservée, colonnes ↔ pile, groupes,
+   anti-chevauchement, réduction si nécessaire, zones sûres 9:16).
+   Un réglage manuel fait dans un format (el.fmt[format]) prime sur l'automatique.
+   --------------------------------------------------------------- */
+export function formatKeyOf(W, H) {
+  let best = '16:9', d = 1e9;
+  for (const [k, f] of Object.entries(FORMATS)) { const e = Math.abs(Math.log((W / H) / (f.w / f.h))); if (e < d) { d = e; best = k; } }
+  return best;
+}
+const RESP_CACHE = new Map();
+let LAST_LAYOUT = new Map();
+export const lastLayout = () => LAST_LAYOUT;
+function boxH(S, el, W, H, w, sizeK = 1) {
+  const bw = w * W;
+  if (el.type === 'text') { const L = textLayout({ ...S, W, H, u: Math.min(W, H) / 1080 }, { ...el, w, size: (+el.size || 72) * sizeK }); return L.h; }
+  if (el.type === 'logo') { const lg = S.assets?.logo; return lg ? bw * (lg.height / lg.width) : bw; }
+  if (el.type === 'image') { const m = S.assets?.media?.[el.media]; return bw * (el.fit === 'contain' && m ? m.height / m.width : (+el.ar || 0.66)); }
+  if (el.type === 'video') return bw * (+el.ar || 0.5625);
+  if (el.type === 'shape') return el.kind === 'line' || el.kind === 'arrow' ? Math.max(8, bw * 0.06) : ['circle', 'star', 'heart', 'check', 'pin'].includes(el.kind) && !el.ar ? bw : bw * (+el.ar || 0.3);
+  if (el.type === 'avatar') return bw * 1.15;
+  return bw;
+}
+/** Calcule la disposition de chaque élément pour le format affiché. Renvoie Map id → { x, y, w, ar?, sizeK, auto }. */
+export function adaptLayout(S, list, defaultSrc = '16:9') {
+  const tk = formatKeyOf(S.W, S.H), TW = FORMATS[tk].w, TH = FORMATS[tk].h;
+  const vis = (list || []).filter((e) => e && !e.hidden);
+  const key = tk + '|' + (document?.fonts?.size || 0) + '|' + JSON.stringify(vis.map((e) => [e.id, e.type, e.x, e.y, e.w, e.ar, e.size, e.text, e.kind, e.font, e.srcFmt, e.fmt?.[tk], e.lineHeight, e.spacing, e.weight, e.upper]));
+  if (RESP_CACHE.has(key)) return RESP_CACHE.get(key);
+  const out = new Map(), auto = [];
+  const m = Math.round(Math.min(TW, TH) * 0.055);
+  const safeTop = tk === '9:16' ? TH * 0.07 : m, safeBot = tk === '9:16' ? TH * 0.84 : TH - m;
+  for (const el of vis) {
+    const sk = el.srcFmt || defaultSrc;
+    const o = el.fmt?.[tk];
+    if (o) { out.set(el.id, { x: o.x ?? el.x, y: o.y ?? el.y, w: o.w ?? el.w, ar: o.ar ?? undefined, sizeK: o.sizeK || 1, auto: false }); continue; }
+    if (sk === tk || !FORMATS[sk]) { out.set(el.id, { x: el.x ?? 0.5, y: el.y ?? 0.5, w: el.w || 0.3, sizeK: 1, auto: false, same: true }); continue; }
+    const SW = FORMATS[sk].w, SH = FORMATS[sk].h;
+    const bw = (el.w || 0.3) * SW, bh = boxH(S, el, SW, SH, el.w || 0.3);
+    const cx = (el.x ?? 0.5) * SW, cy = (el.y ?? 0.5) * SH;
+    const L = cx - bw / 2, R = SW - (cx + bw / 2), T = cy - bh / 2, B = SH - (cy + bh / 2);
+    const full = ['image', 'video', 'shape'].includes(el.type) && bw >= SW * 0.92 && bh >= SH * 0.85;
+    const ha = full ? 'c' : Math.abs(cx - SW / 2) < SW * 0.06 ? 'c' : L < SW * 0.16 && L <= R ? 'l' : R < SW * 0.16 ? 'r' : 'p';
+    const va = full ? 'c' : T < SH * 0.16 && T <= B ? 't' : B < SH * 0.16 ? 'b' : Math.abs(cy - SH / 2) < SH * 0.06 ? 'c' : 'p';
+    const corner = (ha === 'l' || ha === 'r') && (va === 't' || va === 'b') && bw < SW * 0.3 && bh < SH * 0.3;
+    auto.push({ el, sk, SW, SH, bw, bh, cx, cy, L, R, T, B, full, ha, va, corner, kind: el.type });
+  }
+  // Groupes : éléments superposés (ex. avatar posé sur une forme)
+  const parent = auto.map((_, i) => i), find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < auto.length; i++) for (let j = i + 1; j < auto.length; j++) {
+    const a = auto[i], b = auto[j]; if (a.full || b.full || a.corner || b.corner) continue;
+    const ix = Math.max(0, Math.min(a.cx + a.bw / 2, b.cx + b.bw / 2) - Math.max(a.cx - a.bw / 2, b.cx - b.bw / 2));
+    const iy = Math.max(0, Math.min(a.cy + a.bh / 2, b.cy + b.bh / 2) - Math.max(a.cy - a.bh / 2, b.cy - b.bh / 2));
+    const small = Math.min(a.bw * a.bh, b.bw * b.bh);
+    if (ix * iy > small * 0.45 && !(a.kind === 'text' && b.kind === 'text')) parent[find(j)] = find(i);
+  }
+  const units = new Map();
+  auto.forEach((a, i) => { if (a.full || a.corner) return; const r = find(i); if (!units.has(r)) units.set(r, []); units.get(r).push(a); });
+  const unitList = [...units.values()].map((items) => {
+    const x0 = Math.min(...items.map((a) => a.cx - a.bw / 2)), x1 = Math.max(...items.map((a) => a.cx + a.bw / 2));
+    const y0 = Math.min(...items.map((a) => a.cy - a.bh / 2)), y1 = Math.max(...items.map((a) => a.cy + a.bh / 2));
+    return { items, x0, x1, y0, y1, w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, media: items.some((a) => ['image', 'video', 'avatar', 'shape'].includes(a.kind)), text: items.every((a) => a.kind === 'text') };
+  });
+  const place = (a, cxT, cyT, scale = 1) => out.set(a.el.id, { x: cxT / TW, y: cyT / TH, w: Math.min(1.2, (a.bw * scale) / TW), sizeK: a.kind === 'text' ? scale : 1, auto: true });
+  // 1. Plein cadre et coins
+  for (const a of auto) {
+    if (a.full) { out.set(a.el.id, { x: 0.5, y: 0.5, w: 1, ar: TH / TW, sizeK: 1, auto: true }); continue; }
+    if (!a.corner) continue;
+    const bw = Math.min(a.bw, TW * 0.4), bh = a.bh * (bw / a.bw);
+    const mx = Math.max(m, Math.min(a.ha === 'l' ? a.L : a.R, TW * 0.08)), my = Math.max(a.va === 't' ? safeTop : m, Math.min(a.va === 't' ? a.T : a.B, TH * 0.08));
+    const cxT = a.ha === 'l' ? mx + bw / 2 : TW - mx - bw / 2;
+    const cyT = a.va === 't' ? Math.max(safeTop, my) + bh / 2 : Math.min(safeBot, TH - my) - bh / 2;
+    place(a, cxT, cyT, bw / a.bw);
+  }
+  if (!unitList.length) { RESP_CACHE.set(key, out); return out; }
+  // 2. Zone de contenu (sous les éléments de coin du haut, au-dessus de ceux du bas)
+  let top = safeTop, bot = safeBot;
+  for (const a of auto) if (a.corner) { const o = out.get(a.el.id); const h = a.bh * (o.w * TW / a.bw); if (a.va === 't') top = Math.max(top, o.y * TH + h / 2 + m * 0.5); else bot = Math.min(bot, o.y * TH - h / 2 - m * 0.5); }
+  const availH = Math.max(TH * 0.3, bot - top), safeW = TW - 2 * m;
+  const srcLand = unitList[0].items[0].SW > unitList[0].items[0].SH * 1.2, tgtLand = TW > TH * 1.2;
+  const gap = Math.min(TW, TH) * 0.035;
+  const placeUnit = (u, cxT, cyT, k) => { for (const a of u.items) place(a, cxT + (a.cx - u.cx) * k, cyT + (a.cy - u.cy) * k, k); };
+  const unitScale = (u, maxW, maxH) => Math.min(1, maxW / u.w, maxH / u.h);
+  if (!tgtLand && (srcLand || unitList.length > 1)) {
+    // Paysage → vertical/carré : lecture de haut en bas (colonne de gauche, puis de droite), avatars en bas
+    const order = [...unitList].sort((a, b) => {
+      const aAv = a.items.some((x) => x.kind === 'avatar') ? 1 : 0, bAv = b.items.some((x) => x.kind === 'avatar') ? 1 : 0;
+      if (aAv !== bAv) return aAv - bAv;
+      const colA = a.cx < a.items[0].SW * 0.55 ? 0 : 1, colB = b.cx < b.items[0].SW * 0.55 ? 0 : 1;
+      return colA - colB || a.cy - b.cy;
+    });
+    let k = 1;
+    for (let it = 0; it < 4; it++) {
+      const hs = order.map((u) => u.h * Math.min(k, unitScale(u, safeW, availH)));
+      const tot = hs.reduce((x, y) => x + y, 0) + gap * (order.length - 1);
+      if (tot <= availH) break; k *= Math.max(0.55, availH / tot);
+    }
+    let ks = order.map((u) => Math.min(k, unitScale(u, safeW, availH)));
+    let tot = order.reduce((acc, u, i) => acc + u.h * ks[i], 0) + gap * (order.length - 1);
+    if (tot < availH * 0.78) {
+      // Il reste de la place : on agrandit pour occuper l'écran (sans dépasser la largeur utile)
+      const up = Math.min(1.35, (availH * 0.86) / tot);
+      ks = order.map((u, i) => Math.min(ks[i] * up, (safeW * (u.text ? 1 : 0.86)) / u.w));
+      tot = order.reduce((acc, u, i) => acc + u.h * ks[i], 0) + gap * (order.length - 1);
+    }
+    let y = top + Math.max(0, (availH - tot) / 2);
+    order.forEach((u, i) => { const h = u.h * ks[i]; placeUnit(u, TW / 2, y + h / 2, ks[i]); y += h + gap; });
+  } else if (tgtLand && !srcLand) {
+    // Vertical → paysage : visuels d'un côté, textes de l'autre
+    const media = unitList.filter((u) => u.media && !u.text), texts = unitList.filter((u) => !(u.media && !u.text));
+    const cols = media.length && texts.length ? [[texts, TW * 0.04 + m, TW * 0.54], [media, TW * 0.56, TW - m]] : [[unitList, m, TW - m]];
+    for (const [us, x0, x1] of cols) {
+      const cw = x1 - x0; let k = 1;
+      for (let it = 0; it < 4; it++) { const tot = us.reduce((acc, u) => acc + u.h * Math.min(k, unitScale(u, cw, availH)), 0) + gap * (us.length - 1); if (tot <= availH) break; k *= Math.max(0.55, availH / tot); }
+      const ks = us.map((u) => Math.min(k, unitScale(u, cw, availH)));
+      const tot = us.reduce((acc, u, i) => acc + u.h * ks[i], 0) + gap * (us.length - 1);
+      let y = top + Math.max(0, (availH - tot) / 2);
+      us.sort((a, b) => a.cy - b.cy).forEach((u, i) => { const h = u.h * ks[i]; placeUnit(u, (x0 + x1) / 2, y + h / 2, ks[i]); y += h + gap; });
+    }
+  } else {
+    // Même orientation : ancrages proportionnels, puis anti-chevauchement
+    const placed = unitList.map((u) => {
+      const k = unitScale(u, safeW, availH), w = u.w * k, h = u.h * k, S0 = u.items[0];
+      const fx = u.cx / S0.SW, fy = u.cy / S0.SH;
+      const cxT = Math.min(TW - m - w / 2, Math.max(m + w / 2, fx * TW)), cyT = Math.min(bot - h / 2, Math.max(top + h / 2, fy * TH));
+      return { u, k, w, h, cx: cxT, cy: cyT };
+    }).sort((a, b) => a.cy - b.cy);
+    for (let i = 1; i < placed.length; i++) for (let j = 0; j < i; j++) {
+      const a = placed[j], b = placed[i];
+      const ox = Math.min(a.cx + a.w / 2, b.cx + b.w / 2) - Math.max(a.cx - a.w / 2, b.cx - b.w / 2);
+      const oy = a.cy + a.h / 2 + gap * 0.5 - (b.cy - b.h / 2);
+      if (ox > 4 && oy > 0) b.cy = Math.min(bot - b.h / 2, b.cy + oy);
+    }
+    for (const p of placed) placeUnit(p.u, p.cx, p.cy, p.k);
+  }
+  if (RESP_CACHE.size > 300) RESP_CACHE.clear();
+  RESP_CACHE.set(key, out);
+  return out;
+}
+
 /** Texte : mise en page par mots, avec *mots en couleur d'accent*. */
 function textLayout(S, el) {
   const { ctx, u, F } = S;
@@ -1654,10 +1796,12 @@ function textLayout(S, el) {
   const track = (+el.spacing || 0) * size / 100; setTrack(ctx, track);
   const raw = String(el.text || '');
   const words = [];
+  let accOn = false;
   raw.split('\n').forEach((para, pi) => {
     para.split(/\s+/).filter(Boolean).forEach((w, i) => {
-      const acc = /^\*.+\*[.,!?;:]*$/.test(w);
-      let t = acc ? w.replace(/^\*/, '').replace(/\*([.,!?;:]*)$/, '$1') : w;
+      let t = w, acc = accOn;
+      if (/^\*/.test(t)) { acc = true; t = t.slice(1); }
+      if (/\*[.,!?;:…]*$/.test(t)) { t = t.replace(/\*([.,!?;:…]*)$/, '$1'); accOn = false; } else if (acc) accOn = true;
       if (el.upper || (lib?.upper && el.font !== 'texte')) t = t.toUpperCase();
       words.push({ t, acc, br: i === 0 && pi > 0 });
     });
@@ -1837,7 +1981,15 @@ export function estimateTimes(voice, weights) {
     return Math.min(lo, n - 1) / rate;
   });
 }
-export function drawElements(S, list, lt, d, hits) { for (const el of list || []) drawOneElement(S, el, lt, d, hits); }
+export function drawElements(S, list, lt, d, hits) {
+  const lay = adaptLayout(S, list, S.defaultFmt || '16:9');
+  if (hits) for (const [k, v] of lay) LAST_LAYOUT.set(k, v);
+  for (const el of list || []) {
+    const l = lay.get(el.id);
+    const E = !l || l.same ? el : { ...el, x: l.x, y: l.y, w: l.w, ...(l.ar ? { ar: l.ar } : {}), ...(el.type === 'text' && l.sizeK !== 1 ? { size: (+el.size || 72) * l.sizeK } : {}) };
+    drawOneElement(S, E, lt, d, hits);
+  }
+}
 
 const buffers = new WeakMap();
 function bufFor(ctx, W, H) {
@@ -1853,6 +2005,7 @@ function bufFor(ctx, W, H) {
 /** Dessine l'image du projet au temps `time` (en secondes). */
 export function renderFrame(ctx, W, H, project, brand, assets, time, opts = {}) {
   const hits = opts.hits || null;
+  if (hits) LAST_LAYOUT = new Map();
   NARR = []; NARR_EV = [];
   if (assets?.clipEnv) for (const c of audioClipsOf(project)) {
     if (c.kind !== 'voice' || !c.media || !assets.clipEnv[c.media]) continue;
