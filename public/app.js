@@ -1127,6 +1127,8 @@ async function reloadAssets() {
   if (!ed) return;
   Object.values(ed.assets.voices || {}).forEach((v) => { if (!Object.values(a.voices).includes(v)) v.el.pause(); });
   ed.assets = a; ed.dirty = true; renderFilm();
+  if (ed.showAudio) renderAudio();
+  if (ed.showTracks) renderTracks();
 }
 function editorBrandChanged() {
   if (!ed) return;
@@ -1159,10 +1161,12 @@ function renderEditor() {
           <button class="play-btn" data-ed="play" id="playBtn" aria-label="Lecture">${ic('play')}</button>
           <span class="timecode" id="timecode">00:00.0 <span>/ 00:00.0</span></span>
           <div class="scrub" id="scrub" role="slider" aria-label="Position" tabindex="0"><div class="scrub-track" id="scrubTrack"></div><div class="scrub-fill" id="scrubFill"></div><div class="scrub-knob" id="scrubKnob"></div></div>
+ <button class="atl-btn ${ed.showAudio ? 'on' : ''}" data-ed="toggleAudio" id="audioBtn" title="Timeline audio : voix, musique, bruitages">${ic('speaker')}<span>Audio</span></button>
  <button class="icon-btn" data-ed="toggleTracks" id="tracksBtn" title="Pistes de la scène" aria-label="Pistes de la scène" style="color:${ed.showTracks ? '#fff' : ''}">${ic('tracks')}</button>
  <button class="music-chip" data-ed="music" id="musicChip" title="Musique de la vidéo">${ic('musicnav')}<span>${esc(musicLabel())}</span></button>
           <button class="icon-btn" data-ed="loop" id="loopBtn" title="Lecture en boucle" aria-label="Boucle" style="color:${ed.loop ? '#fff' : ''}">${ic('loop')}</button>
         </div>
+        <div class="atl" id="atl" ${ed.showAudio ? '' : 'hidden'}></div>
         <div class="tracks" id="tracks" ${ed.showTracks ? '' : 'hidden'}></div>
         <div class="film" id="film"></div>
       </div>
@@ -1205,7 +1209,7 @@ function loop(ts) {
     const c = $('#edCanvas');
     if (c) { const hits = []; V.renderFrame(c.getContext('2d'), c.width, c.height, projForRender(), ed.brand, ed.assets, ed.time, { hits }); ed.hits = hits; }
     updateTransport(total);
-    drawSelection(); updatePlayheadTracks();
+    drawSelection(); updatePlayheadTracks(); updateAudioPlayhead();
     ed.dirty = false;
   }
   ed.raf = requestAnimationFrame(loop);
@@ -1344,6 +1348,198 @@ function aiVideoSection(s) {
     ${state.ai.configured ? '' : '<span class="hint" style="color:var(--stage-muted)">Ajoute une clé fal.ai dans Réglages pour générer.</span>'}`;
   return `<div class="insp-sec"><div class="label">Vidéo IA de l’avatar</div>${body}</div>`;
 }
+/* =========================================================
+   Timeline audio : voix, musique, bruitages, son des clips
+   ========================================================= */
+const peaksCache = new WeakMap();
+function peaksOf(buf, n = 600) {
+  let c = peaksCache.get(buf); if (c && c.length === n) return c;
+  const d = buf.getChannelData(0), step = Math.max(1, Math.floor(d.length / n)), out = new Float32Array(n);
+  for (let i = 0; i < n; i++) { let m = 0; for (let j = i * step, e = Math.min(d.length, (i + 1) * step); j < e; j += 4) { const v = Math.abs(d[j]); if (v > m) m = v; } out[i] = m; }
+  let mx = 0; for (const v of out) mx = Math.max(mx, v); if (mx > 0) for (let i = 0; i < n; i++) out[i] /= mx;
+  peaksCache.set(buf, out); return out;
+}
+function drawWave(canvas, values, color) {
+  if (!canvas || !values?.length) return;
+  const w = Math.max(10, canvas.clientWidth), h = Math.max(10, canvas.clientHeight);
+  canvas.width = Math.round(w * 2); canvas.height = Math.round(h * 2);
+  const x = canvas.getContext('2d'); x.scale(2, 2); x.fillStyle = color;
+  for (let i = 0; i < w; i++) { const v = values[Math.floor((i / w) * values.length)] || 0; const bh = Math.max(1, v * (h - 4)); x.fillRect(i, (h - bh) / 2, 1, bh); }
+}
+function audioItems() {
+  const proj = projForRender(), { items, total } = V.timeline(proj);
+  const out = { total, scenes: items, voices: [], sfx: [], clips: [], music: null };
+  items.forEach((it) => {
+    const p = it.scene.props || {};
+    if (it.scene.type === 'presentateur' && p.voice) {
+      const vo = ed.assets.voices?.[p.voice];
+      const vd = V.voiceDelayOf(it.scene);
+      out.voices.push({ id: it.scene.id, idx: it.index, at: it.start + vd, dur: vo?.duration || 3, vo, vol: p.voiceVol ?? 1, sceneStart: it.start, sceneEnd: it.end });
+    }
+  });
+  for (const { el, offset, d, item, global } of V.allElements(proj)) {
+    if (el.hidden) continue;
+    if (el.anim?.sfx) out.sfx.push({ id: el.id, global, idx: item?.index, at: offset + (+el.start || 0) + (+el.anim.inDelay || 0) + (+el.anim.sfxOffset || 0), base: offset + (+el.start || 0) + (+el.anim.inDelay || 0), name: SFX[el.anim.sfx]?.name || el.anim.sfx, el });
+    if (el.type === 'video') { const st = offset + (+el.start || 0), en = offset + (el.end == null ? d : Math.min(d, el.end)); out.clips.push({ id: el.id, global, idx: item?.index, at: st, dur: en - st, el }); }
+  }
+  if (proj.music) { const ms = V.musicSettings(proj, total); out.music = { ...ms, name: musicLabel() }; }
+  return out;
+}
+function renderAudio() {
+  const box = $('#atl'); if (!box || !ed || box.hidden) return;
+  const A = audioItems(), T = A.total || 1, z = ed.audioZoom || 1;
+  const pc = (t) => `${(t / T) * 100}%`;
+  const ticks = []; const stepT = T / z > 40 ? 5 : T / z > 15 ? 2 : 1; for (let t = 0; t <= T + 1e-6; t += stepT) ticks.push(t);
+  const sel = ed.audioSel;
+  const isSel = (k, id) => sel && sel.kind === k && (sel.id || '') === (id || '');
+  box.innerHTML = `<div class="atl-top"><span class="atl-title">${ic('speaker')}Timeline audio</span>
+      <span class="hint">Glisse les blocs pour caler le son sur l’image. Clique un bloc pour le régler.</span><span class="spacer"></span>
+      <button class="icon-btn" data-atl="zoomOut" aria-label="Dézoomer" title="Dézoomer">−</button><span class="atl-zoom">${Math.round(z * 100)} %</span><button class="icon-btn" data-atl="zoomIn" aria-label="Zoomer" title="Zoomer">+</button></div>
+    <div class="atl-body"><div class="atl-labels"><span></span>
+        <span>Scènes</span><span>${ic('speaker')}Voix</span><span>${ic('musicnav')}Musique</span><span>${ic('spark')}Bruitages</span><span>${ic('video')}Clips</span></div>
+      <div class="atl-scroll" id="atlScroll"><div class="atl-inner" id="atlInner" style="width:${z * 100}%">
+        <div class="atl-ruler" data-atl-ruler>${ticks.map((t) => `<i style="left:${pc(t)}">${Math.round(t)} s</i>`).join('')}</div>
+        <div class="atl-lane scenes">${A.scenes.map((it) => `<div class="atl-scene ${it.index === ed.sel ? 'on' : ''}" data-atl-scene="${it.index}" style="left:${pc(it.start)};width:${pc(it.end - it.start)}">${it.index + 1}. ${esc(SCENES[it.scene.type]?.label || '')}</div>`).join('')}</div>
+        <div class="atl-lane">${A.voices.map((v) => `<div class="atl-blk voice ${isSel('voice', v.id) ? 'sel' : ''}" data-atl-kind="voice" data-atl-id="${v.id}" style="left:${pc(v.at)};width:${pc(v.dur)}"><canvas data-wave="voice" data-id="${v.id}"></canvas><span>Voix ${v.idx + 1}${v.vol !== 1 ? `, ${Math.round(v.vol * 100)} %` : ''}</span></div>`).join('') || '<span class="atl-empty">Pas de voix. Ajoute-en une dans une scène Présentateur.</span>'}</div>
+        <div class="atl-lane">${A.music ? `<div class="atl-blk music ${isSel('music') ? 'sel' : ''}" data-atl-kind="music" style="left:${pc(A.music.at)};width:${pc(A.music.end - A.music.at)}"><span class="g l" data-atl-grip="l"></span><canvas data-wave="music"></canvas><span>${esc(A.music.name)}, ${Math.round(A.music.volume * 100)} %</span><i class="fade in" style="width:${pc(A.music.fadeIn * T / (A.music.end - A.music.at))}"></i><i class="fade out" style="width:${pc(A.music.fadeOut * T / (A.music.end - A.music.at))}"></i><span class="g r" data-atl-grip="r"></span></div>`
+          : '<button class="atl-empty atl-add" data-ed="music">+ Ajouter une musique</button>'}</div>
+        <div class="atl-lane">${A.sfx.map((x) => `<div class="atl-sfx ${isSel('sfx', x.id) ? 'sel' : ''}" data-atl-kind="sfx" data-atl-id="${x.id}" style="left:${pc(x.at)}" title="${esc(x.name)}"><b></b><span>${esc(x.name)}</span></div>`).join('') || '<span class="atl-empty">Pas de bruitage. Onglet Vidéo : « Ajouter les bruitages automatiquement ».</span>'}</div>
+        <div class="atl-lane">${A.clips.map((c) => `<div class="atl-blk clip ${c.el.muted ? 'muted' : ''} ${isSel('clip', c.id) ? 'sel' : ''}" data-atl-kind="clip" data-atl-id="${c.id}" style="left:${pc(c.at)};width:${pc(c.dur)}"><span>${c.el.muted ? 'Son coupé' : `Son du clip, ${Math.round((c.el.volume ?? 1) * 100)} %`}</span></div>`).join('') || '<span class="atl-empty">Pas de clip vidéo.</span>'}</div>
+        <b class="atl-ph" id="atlPh"></b>
+      </div></div></div>
+    <div class="atl-props" id="atlProps">${audioProps(A)}</div>`;
+  $$('#atl canvas[data-wave]').forEach((c) => {
+    if (c.dataset.wave === 'music' && ed.assets.music?.buffer) drawWave(c, peaksOf(ed.assets.music.buffer), 'rgba(255,255,255,.55)');
+    if (c.dataset.wave === 'voice') { const v = A.voices.find((x) => x.id === c.dataset.id); if (v?.vo) drawWave(c, v.vo.env, 'rgba(255,255,255,.6)'); }
+  });
+  const sc = $('#atlScroll'); if (sc && ed.audioScroll) sc.scrollLeft = ed.audioScroll;
+  updateAudioPlayhead();
+}
+function audioProps(A) {
+  const s = ed.audioSel; if (!s) return '<span class="hint">Sélectionne un bloc pour régler son volume, ses fondus ou son décalage.</span>';
+  const R = (k, label, v, min, max, step, fmt) => `<label class="atl-f"><span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-atlk="${k}"><output data-atlo="${k}">${fmt(v)}</output></label>`;
+  const pct2 = (v) => `${Math.round(v * 100)} %`, s2 = (v) => `${(+v).toFixed(2).replace('.', ',')} s`;
+  if (s.kind === 'voice') {
+    const v = A.voices.find((x) => x.id === s.id); if (!v) return '';
+    const maxD = Math.max(0, (v.sceneEnd - v.sceneStart) - v.dur);
+    return `<b>Voix de la scène ${v.idx + 1}</b>${R('voiceVol', 'Volume', v.vol, 0, 1.5, 0.05, pct2)}${R('voiceDelay', 'Départ dans la scène', v.at - v.sceneStart, 0, Math.max(0.1, maxD), 0.05, s2)}
+      <button class="btn ghost" data-atl="fitScene">Ajuster la scène à la voix</button><button class="btn ghost" data-atl="listen">${ic('play')}Écouter</button>`;
+  }
+  if (s.kind === 'music') {
+    const m = A.music; if (!m) return '';
+    const mu = P().data.music, srcDur = mu?.kind === 'upload' ? (state.music.find((x) => x.media === mu.media)?.duration || 0) : 0;
+    return `<b>Musique</b>${R('mVolume', 'Volume', m.volume, 0.05, 1, 0.05, pct2)}${R('mAt', 'Début dans la vidéo', m.at, 0, Math.max(0.1, A.total - 1), 0.1, s2)}${R('mEnd', 'Fin dans la vidéo', m.end, m.at + 0.5, A.total, 0.1, s2)}
+      ${R('mFadeIn', 'Fondu d’entrée', m.fadeIn, 0, 5, 0.1, s2)}${R('mFadeOut', 'Fondu de sortie', m.fadeOut, 0, 6, 0.1, s2)}
+      ${srcDur > 5 ? R('mOffset', 'Départ dans le morceau', m.offset, 0, Math.floor(srcDur - 3), 0.5, s2) : ''}
+      <label class="switch"><input type="checkbox" data-atlk="mDuck" ${m.duck ? 'checked' : ''}>Baisser pendant les voix</label>`;
+  }
+  if (s.kind === 'sfx') {
+    const x = A.sfx.find((y) => y.id === s.id); if (!x) return '';
+    return `<b>Bruitage</b><label class="atl-f"><span>Son</span><select data-atlk="sfxType">${Object.entries(SFX).map(([k, v]) => `<option value="${k}" ${x.el.anim.sfx === k ? 'selected' : ''}>${esc(v.cat)} : ${esc(v.name)}</option>`).join('')}</select></label>
+      ${R('sfxVol', 'Volume', x.el.anim.sfxVol ?? 0.7, 0, 1, 0.05, pct2)}${R('sfxOffset', 'Décalage / apparition', x.el.anim.sfxOffset || 0, -1.5, 2, 0.05, (v) => `${v > 0 ? '+' : ''}${(+v).toFixed(2).replace('.', ',')} s`)}
+      <button class="btn ghost" data-atl="listen">${ic('play')}Écouter</button><button class="btn ghost danger" data-atl="sfxDel">${ic('trash')}Retirer</button>`;
+  }
+  if (s.kind === 'clip') {
+    const c = A.clips.find((y) => y.id === s.id); if (!c) return '';
+    return `<b>Son du clip vidéo</b>${R('clipVol', 'Volume', c.el.volume ?? 1, 0, 1, 0.05, pct2)}<label class="switch"><input type="checkbox" data-atlk="clipMute" ${c.el.muted ? 'checked' : ''}>Couper le son</label>`;
+  }
+  return '';
+}
+function audioTarget() {
+  const s = ed.audioSel; if (!s) return null;
+  if (s.kind === 'voice') return scenesOf().find((x) => x.id === s.id);
+  if (s.kind === 'sfx' || s.kind === 'clip') return V.allElements(projForRender()).find((x) => x.el.id === s.id)?.el;
+  return P().data.music;
+}
+function updateAudioPlayhead() {
+  const ph = $('#atlPh'); if (!ph || !ed) return;
+  const T = V.timeline(projForRender()).total || 1;
+  ph.style.left = `${(ed.time / T) * 100}%`;
+}
+function bindAudio() {
+  const box = $('#atl'); if (!box) return;
+  let drag = null;
+  const secPerPx = () => { const inner = $('#atlInner'); return (V.timeline(projForRender()).total || 1) / (inner?.clientWidth || 1); };
+  box.addEventListener('scroll', () => {}, true);
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-atl]'); if (!b) return;
+    const k = b.dataset.atl;
+    if (k === 'zoomIn' || k === 'zoomOut') { ed.audioZoom = clamp((ed.audioZoom || 1) * (k === 'zoomIn' ? 1.5 : 1 / 1.5), 1, 12); renderAudio(); return; }
+    const t = audioTarget(); const A = audioItems();
+    if (k === 'listen') {
+      if (ed.audioSel.kind === 'sfx' && t?.anim?.sfx) renderSfx(t.anim.sfx).then((buf) => playBuffer(buf, t.anim.sfxVol ?? 0.7));
+      if (ed.audioSel.kind === 'voice') { const v = A.voices.find((x) => x.id === ed.audioSel.id); if (v) { setPlaying(false); seek(v.at - 0.2); setPlaying(true); } }
+    }
+    if (k === 'sfxDel' && t) { beforeChange(); t.anim.sfx = ''; ed.audioSel = null; changed({ film: true, inspector: true }); }
+    if (k === 'fitScene' && t) { const v = A.voices.find((x) => x.id === t.id); if (v) { beforeChange(); t.duration = clamp(Math.ceil((v.at - v.sceneStart + v.dur + 0.8) * 2) / 2, 2, 60); changed({ film: true, inspector: true, scrub: true }); } }
+  });
+  box.addEventListener('pointerdown', (e) => {
+    const ruler = e.target.closest('[data-atl-ruler]');
+    if (ruler) { const r = $('#atlInner').getBoundingClientRect(); setPlaying(false); seek(clamp((e.clientX - r.left) / r.width, 0, 1) * V.timeline(projForRender()).total); return; }
+    const sc = e.target.closest('[data-atl-scene]');
+    if (sc) { selectScene(+sc.dataset.atlScene, true); renderAudio(); return; }
+    const blk = e.target.closest('[data-atl-kind]'); if (!blk) return;
+    ed.audioSel = { kind: blk.dataset.atlKind, id: blk.dataset.atlId || '' };
+    const t = audioTarget(); if (!t) return;
+    renderAudio();
+    if (ed.audioSel.kind === 'clip') return;
+    beforeChange();
+    const A = audioItems(), grip = e.target.dataset.atlGrip || 'move';
+    drag = { kind: ed.audioSel.kind, id: ed.audioSel.id, grip, x0: e.clientX, spp: secPerPx(), t, A,
+      v0: ed.audioSel.kind === 'voice' ? V.voiceDelayOf(t) : ed.audioSel.kind === 'sfx' ? (+t.anim.sfxOffset || 0) : null,
+      m0: A.music ? { ...A.music } : null };
+    box.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dt = (e.clientX - drag.x0) * drag.spp, snap = (v) => Math.round(v * 20) / 20;
+    if (drag.kind === 'voice') {
+      const v = drag.A.voices.find((x) => x.id === drag.id), maxD = Math.max(0, (v.sceneEnd - v.sceneStart) - v.dur);
+      drag.t.props.voiceDelay = clamp(snap(drag.v0 + dt), 0, Math.max(0, maxD));
+    } else if (drag.kind === 'sfx') {
+      drag.t.anim.sfxOffset = clamp(snap(drag.v0 + dt), -1.5, 2);
+    } else if (drag.kind === 'music') {
+      const m = P().data.music, T = drag.A.total, m0 = drag.m0;
+      if (drag.grip === 'l') m.at = clamp(snap(m0.at + dt), 0, m0.end - 0.5);
+      else if (drag.grip === 'r') { const en = clamp(snap(m0.end + dt), m0.at + 0.5, T); m.end = en >= T - 0.05 ? null : en; }
+      else { const len = m0.end - m0.at; const at = clamp(snap(m0.at + dt), 0, T - len); m.at = at; m.end = at + len >= T - 0.05 ? null : at + len; }
+    }
+    ed.dirty = true; renderAudio();
+  });
+  const end = () => { if (!drag) return; const k = drag.kind; drag = null; changed({ inspector: false }); if (k === 'voice') renderTracks(); };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  box.addEventListener('input', (e) => {
+    const el = e.target, k = el.dataset.atlk; if (!k) return;
+    const t = audioTarget(); if (!t) return;
+    const v = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' ? el.value : +el.value;
+    beforeChange();
+    const m = P().data.music;
+    switch (k) {
+      case 'voiceVol': t.props.voiceVol = v; break;
+      case 'voiceDelay': t.props.voiceDelay = v; break;
+      case 'mVolume': m.volume = v; break;
+      case 'mAt': m.at = v; if (m.end != null && m.end < v + 0.5) m.end = v + 0.5; break;
+      case 'mEnd': m.end = v >= V.timeline(projForRender()).total - 0.05 ? null : v; break;
+      case 'mFadeIn': m.fadeIn = v; break;
+      case 'mFadeOut': m.fadeOut = v; break;
+      case 'mOffset': m.offset = v; break;
+      case 'mDuck': m.duck = v; break;
+      case 'sfxType': t.anim.sfx = v; reloadAssets().then(() => renderSfx(v).then((buf) => playBuffer(buf, t.anim.sfxVol ?? 0.7))); break;
+      case 'sfxVol': t.anim.sfxVol = v; break;
+      case 'sfxOffset': t.anim.sfxOffset = v; break;
+      case 'clipVol': t.volume = v; break;
+      case 'clipMute': t.muted = v; break;
+      default: break;
+    }
+    const o = $(`[data-atlo="${k}"]`);
+    if (o) o.textContent = /Vol|Volume/.test(k) ? `${Math.round(v * 100)} %` : k === 'sfxOffset' ? `${v > 0 ? '+' : ''}${(+v).toFixed(2).replace('.', ',')} s` : `${(+v).toFixed(2).replace('.', ',')} s`;
+    if (k === 'mOffset') reloadAssets();
+    ed.dirty = true; setStatus('saving'); ed.save();
+    if (el.type !== 'range') renderAudio(); else clearTimeout(ed.atlT), (ed.atlT = setTimeout(renderAudio, 350));
+  });
+  box.addEventListener('scroll', (e) => { if (e.target.id === 'atlScroll') ed.audioScroll = e.target.scrollLeft; }, true);
+}
+
 /* =========================================================
    Éléments libres : sélection, propriétés, ajout, pistes
    ========================================================= */
@@ -1530,7 +1726,7 @@ function renderTracks() {
   const vo = s.props?.voice && ed.assets.voices?.[s.props.voice];
   const ticks = []; for (let t = 0; t <= D + 1e-6; t += D > 12 ? 2 : 1) ticks.push(t);
   box.innerHTML = `<div class="tr-head"><span class="tr-label">Scène ${ed.sel + 1}, ${sec(D)}</span><div class="tr-ruler" data-ruler>${ticks.map((t) => `<i style="left:${(t / D) * 100}%">${Math.round(t)} s</i>`).join('')}<b class="tr-ph" id="trPh"></b></div></div>
-    ${vo ? `<div class="tr-row"><span class="tr-label">${ic('speaker')}Voix</span><div class="tr-lane"><canvas class="tr-wave" id="trWave" style="left:${(V.VOICE_DELAY / D) * 100}%;width:${Math.min(100, (vo.duration / D) * 100)}%"></canvas></div></div>` : ''}
+    ${vo ? `<div class="tr-row"><span class="tr-label">${ic('speaker')}Voix</span><div class="tr-lane"><canvas class="tr-wave" id="trWave" style="left:${(V.voiceDelayOf(s) / D) * 100}%;width:${Math.min(100, (vo.duration / D) * 100)}%"></canvas></div></div>` : ''}
     ${[...els].reverse().map((el) => {
       const st = +el.start || 0, en = el.end == null ? D : Math.min(D, el.end);
       return `<div class="tr-row ${ed.selEl?.id === el.id ? 'on' : ''}"><span class="tr-label" data-ed="selEl" data-scope="scene" data-id="${el.id}">${ic(EL_ICON[el.type])}${esc(elLabel(el))}</span>
@@ -1586,7 +1782,7 @@ function playSfxBetween(t0, t1) {
   if (!ed?.assets?.sfx) return;
   for (const { el, offset } of V.allElements(projForRender())) {
     if (el.hidden || !el.anim?.sfx) continue;
-    const at = offset + (+el.start || 0) + (+el.anim.inDelay || 0);
+    const at = offset + (+el.start || 0) + (+el.anim.inDelay || 0) + (+el.anim.sfxOffset || 0);
     if (at >= t0 && at < t1) playBuffer(ed.assets.sfx[el.anim.sfx], el.anim.sfxVol ?? 0.7);
   }
 }
@@ -1847,6 +2043,7 @@ function beforeChange() {
 function changed({ film = false, clip = null, inspector = false, scrub = false } = {}) {
   ed.dirty = true;
   if (ed.showTracks) setTimeout(renderTracks, 0);
+  if (ed.showAudio) setTimeout(renderAudio, 0);
   if (film) renderFilm(); else if (clip !== null) redrawClip(clip);
   if (inspector) renderInspector();
   if (scrub) renderScrub();
@@ -1929,7 +2126,7 @@ function bindEditor() {
     ed.sel = to; changed({ film: true, inspector: true });
   });
   ed.onKey = onEdKey; addEventListener('keydown', ed.onKey);
-  bindCanvas(); bindTracks();
+  bindCanvas(); bindTracks(); bindAudio();
 }
 function selectScene(i, doSeek = false) {
   if (ed.sel !== i) ed.selEl = ed.selEl?.scope === 'global' ? ed.selEl : null;
@@ -2074,7 +2271,7 @@ function onEdClick(e) {
     const el = selElement(), vo = ed.assets.voices?.[curScene().props.voice]; if (!el || !vo) return;
     const words = String(el.text || '').split(/\s+/).filter(Boolean);
     const times = V.estimateTimes(vo, words.map((w) => w.replace(/\*/g, '').length + 2));
-    beforeChange(); el.start = Math.max(0, Math.round((V.VOICE_DELAY + times[0] - 0.05) * 100) / 100);
+    beforeChange(); el.start = Math.max(0, Math.round((V.voiceDelayOf(curScene()) + times[0] - 0.05) * 100) / 100);
     el.anim = { ...el.anim, in: 'words', inDelay: 0, inDur: 0.4 }; el.wordTimes = times.map((t) => Math.round((t - times[0]) * 100) / 100);
     changed({ clip: ed.sel, inspector: true }); renderTracks(); toast(`${plural(words.length, 'mot calé', 'mots calés')} sur la voix (estimation)`, 'ok');
   }
@@ -2085,13 +2282,14 @@ function onEdClick(e) {
     const times = V.estimateTimes(vo, sentences.map((x) => x.length + 4));
     beforeChange();
     sentences.forEach((txt, i) => {
-      const st = V.VOICE_DELAY + times[i], en = i < sentences.length - 1 ? V.VOICE_DELAY + times[i + 1] - 0.05 : Math.min(sceneDur(), V.VOICE_DELAY + vo.duration + 0.3);
+      const vd = V.voiceDelayOf(s), st = vd + times[i], en = i < sentences.length - 1 ? vd + times[i + 1] - 0.05 : Math.min(sceneDur(), vd + vo.duration + 0.3);
       (s.elements ||= []).push(V.newElement('text', { text: txt, font: 'titre', size: 64, w: 0.8, y: 0.82, start: Math.round(st * 100) / 100, end: Math.round(en * 100) / 100, shadow: true, anim: { ...V.newElement('text').anim, in: 'slideUp', inDur: 0.4, out: 'fade', outDur: 0.25 } }));
     });
     if (s.props.captions) s.props.captions = false;
     changed({ clip: ed.sel, inspector: true }); ed.showTracks = true; $('#tracks').hidden = false; renderTracks();
     toast(`${plural(sentences.length, 'titre synchronisé', 'titres synchronisés')} avec la voix. Ajuste-les dans les pistes.`, 'ok');
   }
+  else if (a === 'toggleAudio') { ed.showAudio = !ed.showAudio; $('#atl').hidden = !ed.showAudio; b.classList.toggle('on', ed.showAudio); renderAudio(); fitCanvas(); }
   else if (a === 'toggleTracks') { ed.showTracks = !ed.showTracks; $('#tracks').hidden = !ed.showTracks; b.style.color = ed.showTracks ? '#fff' : ''; renderTracks(); fitCanvas(); }
   else if (a === 'music') musicDialog();
   else if (a === 'musicRemove') { beforeChange(); delete P().data.music; reloadAssets().then(() => { refreshMusicChip(); changed({ inspector: true }); }); }
@@ -2226,7 +2424,7 @@ async function applyVoice(sc, mediaId) {
   await reloadAssets();
   if (!ed) return;
   const vo = ed.assets.voices?.[mediaId];
-  if (vo) sc.duration = clamp(Math.ceil((vo.duration + V.VOICE_DELAY + 0.9) * 2) / 2, 2, 60);
+  if (vo) sc.duration = clamp(Math.ceil((vo.duration + V.voiceDelayOf(sc) + 0.9) * 2) / 2, 2, 60);
   changed({ film: true, inspector: true, scrub: true });
 }
 async function startJob(sc, field, body) {

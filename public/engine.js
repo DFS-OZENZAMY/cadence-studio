@@ -9,6 +9,15 @@ import { renderSfx } from './sfx.js';
 export { MUSIC_TRACKS };
 export { DEFAULT_CHAR };
 export const VOICE_DELAY = 0.5;
+/** Décalage de la voix dans sa scène (réglable dans la timeline audio). */
+export const voiceDelayOf = (scene) => { const v = scene?.props?.voiceDelay; return v == null ? VOICE_DELAY : Math.max(0, +v); };
+/** Réglages effectifs de la musique : position dans la vidéo, fin, fondus, volume. */
+export function musicSettings(project, total) {
+  const m = project.music || {};
+  const at = clamp(+m.at || 0, 0, Math.max(0, total - 0.5));
+  const end = m.end == null ? total : clamp(+m.end, at + 0.5, total);
+  return { at, end, offset: Math.max(0, +m.offset || 0), volume: m.volume ?? 0.6, duck: m.duck !== false, fadeIn: m.fadeIn ?? 0.6, fadeOut: m.fadeOut ?? 1.8 };
+}
 
 /* ---------------------------------------------------------------
    Formats, polices, ambiances
@@ -984,8 +993,9 @@ export const SCENES = {
       const P = pad(S);
       const av = p.avatar || { kind: 'illustre', config: DEFAULT_CHAR };
       const voice = p.voice ? S.assets?.voices?.[p.voice] : null;
-      const lt = t - VOICE_DELAY;
-      const vdur = voice ? voice.duration : Math.max(1, d - VOICE_DELAY - 0.6);
+      const vd = p.voiceDelay == null ? VOICE_DELAY : Math.max(0, +p.voiceDelay);
+      const lt = t - vd;
+      const vdur = voice ? voice.duration : Math.max(1, d - vd - 0.6);
       const speaking = lt >= 0 && lt <= vdur;
       const talk = voice ? envAt(voice, lt) : (p.script && speaking ? synthTalk(lt) : 0);
       const act = voice ? (envAt(voice, lt - 0.4) + envAt(voice, lt) + envAt(voice, lt + 0.4)) / 3 : (speaking && p.script ? 0.55 : 0);
@@ -1076,7 +1086,7 @@ export const SCENES = {
         let y = content.y + Math.max(0, (content.h - th - (rows.length ? 50 * u + rh : 0)) / 2);
         if (T) y += revealLines(S, T, content.x, y, { start: 0.35, color: pal.fg }) + 50 * u;
         rows.forEach((R, i) => {
-          const st = VOICE_DELAY + 0.3 + (vdur * 0.8 * i) / Math.max(1, rows.length);
+          const st = vd + 0.3 + (vdur * 0.8 * i) / Math.max(1, rows.length);
           const q = E.outExpo(prog(t, st, 0.7));
           if (q > 0) {
             ctx.save(); ctx.globalAlpha *= clamp(q * 1.5); ctx.translate((1 - q) * 40 * u, 0);
@@ -1446,6 +1456,7 @@ function makeS(ctx, W, H, item, localT, brand, assets, globalT, projText) {
   const RT = resolveText(brand, projText, s.text);
   S.F = RT.F; TS = RT.ts; BS = RT.bs;
   S.sceneVoice = s.props?.voice ? assets?.voices?.[s.props.voice] : null;
+  S.voiceDelay = voiceDelayOf(s);
   return S;
 }
 function drawScene(ctx, W, H, item, localT, brand, assets, globalT, projText, hits) {
@@ -1463,6 +1474,7 @@ function drawScene(ctx, W, H, item, localT, brand, assets, globalT, projText, hi
   const RT = resolveText(b, projText, s.text);
   S.F = RT.F; TS = RT.ts; BS = RT.bs;
   S.sceneVoice = s.props?.voice ? assets?.voices?.[s.props.voice] : null;
+  S.voiceDelay = voiceDelayOf(s);
   ctx.save();
   paintBackground(S);
   def.draw(S);
@@ -1691,7 +1703,7 @@ function drawOneElement(S, el, lt, d, hits) {
     const av = el.avatar?.kind === 'illustre' ? el.avatar.config : DEFAULT_CHAR;
     const sp = S.sceneVoice;
     let talk = 0, act = 0;
-    if (el.talk === 'voice' && sp) { const vl = lt - VOICE_DELAY; talk = envAt(sp, vl); act = (envAt(sp, vl - 0.4) + talk + envAt(sp, vl + 0.4)) / 3; }
+    if (el.talk === 'voice' && sp) { const vl = lt - (S.voiceDelay ?? VOICE_DELAY); talk = envAt(sp, vl); act = (envAt(sp, vl - 0.4) + talk + envAt(sp, vl + 0.4)) / 3; }
     else if (el.talk === 'mime' || (el.talk === 'voice' && !sp)) { const on = el.talk === 'mime'; talk = on ? synthTalk(lt) : 0; act = on ? 0.55 : 0; }
     const g = el.gesture || 'auto';
     const gesture = g === 'idle' ? 0 : g === 'wave' ? 0.75 + 0.25 * Math.sin(lt * 7) : g === 'pointLeft' || g === 'pointRight' ? 1 : clamp(Math.sin(lt * 0.8 + 0.6) * 1.7 - 0.4) * clamp(act * 2);
@@ -1964,7 +1976,7 @@ export async function seekVideos(project, assets, time, fps = 30) {
     if (time < it.start || time >= it.end) continue;
     const v = it.scene.props?.video && assets.videos[it.scene.props.video];
     if (!v) continue;
-    const target = clamp(time - it.start - VOICE_DELAY, 0, Math.max(0, (v.duration || 0) - 0.04));
+    const target = clamp(time - it.start - voiceDelayOf(it.scene), 0, Math.max(0, (v.duration || 0) - 0.04));
     if (Math.abs(v.currentTime - target) < 0.4 / fps && !v.seeking) continue;
     jobs.push(new Promise((res) => {
       let fin = false; const done = () => { if (fin) return; fin = true; clearTimeout(to); res(); };
@@ -1982,7 +1994,7 @@ export function syncPreview(project, assets, time, playing, onSeeked) {
   let voiceOn = false;
   for (const it of timeline(project).items) {
     if (it.scene.type !== 'presentateur') continue;
-    const p = it.scene.props || {}, lt = time - it.start - VOICE_DELAY, inScene = time >= it.start && time < it.end;
+    const p = it.scene.props || {}, lt = time - it.start - voiceDelayOf(it.scene), inScene = time >= it.start && time < it.end;
     const v = p.video && assets.videos?.[p.video];
     if (v && inScene) {
       actV.add(v);
@@ -1998,6 +2010,7 @@ export function syncPreview(project, assets, time, playing, onSeeked) {
     if (vo && inScene && lt >= 0 && lt < vo.duration) voiceOn = true;
     if (vo && inScene) {
       actA.add(vo.el);
+      vo.el.volume = clamp(p.voiceVol ?? 1);
       if (playing && lt >= 0 && lt < vo.duration) {
         if (vo.el.paused) { vo.el.currentTime = lt; vo.el.play().catch(() => {}); } else if (Math.abs(vo.el.currentTime - lt) > 0.3) vo.el.currentTime = lt;
       } else if (!vo.el.paused) vo.el.pause();
@@ -2016,12 +2029,14 @@ export function syncPreview(project, assets, time, playing, onSeeked) {
   }
   const mu = assets.music;
   if (mu?.el) {
-    const el = mu.el, target = time + mu.offset, total = timeline(project).total;
-    if (playing && el.duration && target < el.duration && time < total) {
+    const total = timeline(project).total, ms = musicSettings(project, total);
+    const el = mu.el, target = time - ms.at + ms.offset;
+    const inRange = time >= ms.at && time < ms.end;
+    if (playing && inRange && el.duration && target < el.duration) {
       if (el.paused) { el.currentTime = target; el.play().catch(() => {}); } else if (Math.abs(el.currentTime - target) > 0.3) el.currentTime = target;
     } else if (!el.paused) el.pause();
-    const fade = Math.min(1, time / 0.6, Math.max(0, (total - time) / 1.8));
-    el.volume = clamp(mu.volume * (mu.duck && voiceOn ? 0.25 : 1) * fade, 0, 1);
+    const fade = inRange ? Math.min(1, ms.fadeIn > 0 ? (time - ms.at) / ms.fadeIn : 1, ms.fadeOut > 0 ? Math.max(0, (ms.end - time) / ms.fadeOut) : 1) : 0;
+    el.volume = clamp(ms.volume * (ms.duck && voiceOn ? 0.25 : 1) * fade, 0, 1);
   }
   for (const v of Object.values(assets.videos || {})) if (!actV.has(v) && !v.paused) v.pause();
   for (const vo of Object.values(assets.voices || {})) if (!actA.has(vo.el) && !vo.el.paused) vo.el.pause();
@@ -2061,24 +2076,25 @@ async function pickAudioConfig(sampleRate) {
   return null;
 }
 /** Mixe la musique et les voix ; la musique baisse automatiquement quand quelqu'un parle. */
-async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, volume = 0.8, voices, total, sfx = [], clips = [] }) {
+async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, volume = 0.8, voices, total, sfx = [], clips = [], at = 0, end = null, fadeIn = 0.6, fadeOut = 1.8 }) {
+  end = end == null ? total : Math.min(end, total);
   const sr = 48000;
   const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr);
   const vs = [...voices].sort((x, y) => x.at - y.at);
   if (music || musicBuffer) {
     const decoded = musicBuffer || await decodeAudio(await music.arrayBuffer());
-    const src = off.createBufferSource(); src.buffer = decoded; src.loop = decoded.duration - offset < total;
+    const src = off.createBufferSource(); src.buffer = decoded; src.loop = decoded.duration - offset < end - at;
     if (src.loop) { src.loopStart = Math.min(offset, Math.max(0, decoded.duration - 1)); src.loopEnd = decoded.duration; }
     const g = off.createGain(); const duckLevel = duck ? volume * 0.25 : volume;
     let level = 0, last = 0;
     const hold = (time) => { time = Math.max(time, last); g.gain.setValueAtTime(level, time); last = time; };
     const ramp = (time, v) => { time = Math.max(time, last + 0.01); g.gain.linearRampToValueAtTime(v, time); last = time; level = v; };
-    g.gain.setValueAtTime(0, 0); ramp(Math.min(0.6, total / 4), volume);
-    for (const v of vs) { hold(v.at - 0.35); ramp(v.at, duckLevel); hold(v.end); ramp(v.end + 0.45, volume); }
-    hold(total - 1.8); ramp(total, 0);
-    src.connect(g); g.connect(off.destination); src.start(0, Math.min(offset, Math.max(0, decoded.duration - 0.1)));
+    g.gain.setValueAtTime(0, 0); hold(at); ramp(at + Math.max(0.01, Math.min(fadeIn, (end - at) / 3)), volume);
+    for (const v of vs) { if (v.end < at || v.at > end) continue; hold(v.at - 0.35); ramp(v.at, duckLevel); hold(v.end); ramp(v.end + 0.45, volume); }
+    hold(end - Math.max(0.01, Math.min(fadeOut, (end - at) / 2))); ramp(end, 0);
+    src.connect(g); g.connect(off.destination); src.start(at, Math.min(offset, Math.max(0, decoded.duration - 0.1))); src.stop(end + 0.05);
   }
-  for (const v of vs) { const src = off.createBufferSource(); src.buffer = v.buffer; src.connect(off.destination); src.start(Math.max(0, v.at)); }
+  for (const v of vs) { const src = off.createBufferSource(); src.buffer = v.buffer; const g = off.createGain(); g.gain.value = clamp(v.vol ?? 1, 0, 1.5); src.connect(g); g.connect(off.destination); src.start(Math.max(0, v.at)); }
   for (const e of sfx) { if (!e.buffer || e.at >= total) continue; const src = off.createBufferSource(); src.buffer = e.buffer; const g = off.createGain(); g.gain.value = clamp(e.vol ?? 0.7); src.connect(g); g.connect(off.destination); src.start(Math.max(0, e.at)); }
   for (const c of clips) {
     if (!c.buffer || c.at >= total) continue;
@@ -2104,12 +2120,12 @@ export async function exportVideo(opts) {
   let audioBuf = null, audio = null;
   const voices = timeline(project).items
     .filter((it) => it.scene.type === 'presentateur' && it.scene.props?.voice && assets?.voices?.[it.scene.props.voice])
-    .map((it) => { const v = assets.voices[it.scene.props.voice]; const at = it.start + VOICE_DELAY; return { buffer: v.buffer, at, end: Math.min(it.end, at + v.duration) }; });
+    .map((it) => { const v = assets.voices[it.scene.props.voice]; const at = it.start + voiceDelayOf(it.scene); return { buffer: v.buffer, at, end: Math.min(it.end, at + v.duration), vol: it.scene.props.voiceVol ?? 1 }; });
   const am = assets?.music;
   const sfxEv = [], clips = [];
   for (const { el, offset, d } of allElements(project)) {
     if (el.hidden) continue;
-    if (el.anim?.sfx && assets?.sfx?.[el.anim.sfx]) sfxEv.push({ buffer: assets.sfx[el.anim.sfx], at: offset + (+el.start || 0) + (+el.anim.inDelay || 0), vol: el.anim.sfxVol ?? 0.7 });
+    if (el.anim?.sfx && assets?.sfx?.[el.anim.sfx]) sfxEv.push({ buffer: assets.sfx[el.anim.sfx], at: offset + (+el.start || 0) + (+el.anim.inDelay || 0) + (+el.anim.sfxOffset || 0), vol: el.anim.sfxVol ?? 0.7 });
     if (el.type === 'video' && !el.muted && assets?.clipAudio?.[el.media]) {
       const st = +el.start || 0, dur = elEnd(el, d) - st, buf = assets.clipAudio[el.media];
       const maxDur = ((el.trimOut != null ? +el.trimOut : buf.duration) - (+el.trimIn || 0)) / (+el.speed || 1);
@@ -2118,7 +2134,8 @@ export async function exportVideo(opts) {
   }
   if (music || am || voices.length || sfxEv.length || clips.length) {
     onProgress?.({ phase: 'prepare', progress: 0 });
-    audioBuf = await mixAudio(music ? { music, volume, voices, total: frames / fps, sfx: sfxEv, clips } : { musicBuffer: am?.buffer, offset: am?.offset || 0, duck: am?.duck !== false, volume: am?.volume ?? volume, voices, total: frames / fps, sfx: sfxEv, clips });
+    const ms = musicSettings(project, frames / fps);
+    audioBuf = await mixAudio(music ? { music, volume, voices, total: frames / fps, sfx: sfxEv, clips } : { musicBuffer: am?.buffer, offset: ms.offset, duck: ms.duck, volume: ms.volume, at: ms.at, end: ms.end, fadeIn: ms.fadeIn, fadeOut: ms.fadeOut, voices, total: frames / fps, sfx: sfxEv, clips });
     audio = await pickAudioConfig(audioBuf.sampleRate);
   }
   const target = new ArrayBufferTarget();

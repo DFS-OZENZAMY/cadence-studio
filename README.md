@@ -12,6 +12,7 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
 - **Éléments globaux** : un logo, un slogan ou un mot-clé ajouté une fois et affiché sur toute la vidéo, avec masquage scène par scène.
 - **Vidéos importées** (MP4, MOV, WebM) : découpage, scission, vitesse, volume ou son coupé, cadrage et coins arrondis.
 - **Pistes de scène** : chaque élément est une barre déplaçable et redimensionnable (aimantation au dixième de seconde et à la tête de lecture), avec la forme d’onde de la voix.
+- **Timeline audio sur toute la vidéo** : pistes Voix, Musique, Bruitages et Clips, en face des scènes, avec formes d’onde, tête de lecture et zoom. On y fait glisser la voix dans sa scène, la musique (début, fin, poignées), les bruitages (avant ou après l’apparition de leur élément), et on règle volume, fondus d’entrée et de sortie, départ dans le morceau et baisse pendant les voix. Tout est respecté à l’export.
 - **Synchronisation texte et voix** (estimation à partir des pauses) : titres phrase par phrase, ou texte mot par mot calé sur la voix, ensuite ajustables à la main.
 - **Sound design** : 19 bruitages synthétisés, libres de droits (interface, mouvement, cinéma, technologie), attachés à l’apparition des éléments, avec suggestion automatique selon l’animation.
 - **Scène libre** : un fond vide à composer entièrement.
