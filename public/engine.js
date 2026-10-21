@@ -694,8 +694,10 @@ export const SCENES = {
         ctx.fillStyle = 'rgba(0,0,0,.65)'; rrect(ctx, x, y, w, 46 * u, 23 * u); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(txt, x + 18 * u, y + 31 * u);
       };
+      const cfgA = av.kind === 'illustre' ? (av.config || {}) : {};
+      const tall = (cfgA.style === 'mascotte' ? 1.08 : 1) * (cfgA.species && cfgA.species !== 'humain' ? 1.07 : 1) * (cfgA.hat === 'bonnet' || cfgA.hair === 'crete' || cfgA.hair === 'afro' ? 1.05 : 1);
       const drawIllustrated = (cx, bottom, h) => {
-        const sc = h / 820;
+        const sc = h / (820 * tall);
         const g = ctx.createRadialGradient(cx, bottom - 560 * sc, 0, cx, bottom - 560 * sc, 470 * sc);
         g.addColorStop(0, rgba(pal.accent, 0.38 * fade)); g.addColorStop(1, rgba(pal.accent, 0));
         ctx.fillStyle = g; ctx.fillRect(cx - 500 * sc, bottom - 1100 * sc, 1000 * sc, 1100 * sc);

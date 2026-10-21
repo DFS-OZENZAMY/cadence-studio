@@ -1,6 +1,6 @@
 /* Cadence — application */
 import * as V from './engine.js';
-import { drawCharacter, synthTalk, SKINS, HAIR_COLORS, HAIR_STYLES, DEFAULT_CHAR } from './avatar.js';
+import { drawCharacter, SKINS, FURS, HAIR_COLORS, EYE_COLORS, OUTFIT_COLORS, OPTIONS, PRESETS, DEFAULT_CHAR, normChar, randomChar } from './avatar.js';
 const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND } = V;
 
 /* =========================================================
@@ -611,17 +611,17 @@ function drawAvatarThumb(c, av, brand, t = 1.2) {
   x.fillStyle = g; x.fillRect(0, 0, c.width, c.height);
   drawCharacter(x, av?.config || DEFAULT_CHAR, c.width / 2, c.height * 1.02, (c.height * 1.05) / 820, { t, talk: 0, dir: 1, outfit: B.colors.primary, accent: B.colors.secondary });
 }
-function presenterPreview(av, layout = 'plein', script = 'Bonjour ! Je suis votre présentateur. Je parle aux couleurs de vos clients.') {
-  return { scenes: [{ id: 'av-prev', type: 'presentateur', duration: 7, transition: 'fondu', bg: 'auto', props: { ...structuredClone(V.SCENES.presentateur.defaults), avatar: av, layout, script, title: layout === 'plein' ? '' : 'Votre message', captions: true } }], fadeOut: false };
+function presenterPreview(av, layout = 'plein', script = 'Bonjour ! Je suis votre présentateur. Je parle aux couleurs de vos clients.', captions = true) {
+  return { scenes: [{ id: 'av-prev', type: 'presentateur', duration: 7, transition: 'fondu', bg: 'auto', props: { ...structuredClone(V.SCENES.presentateur.defaults), avatar: av, layout, script, title: layout === 'plein' ? '' : 'Votre message', captions } }], fadeOut: false };
 }
 PAGES.avatars = () => `
   <header class="page-head"><div><h1>Avatars</h1><p class="sub">Les présentateurs qui parlent dans tes vidéos. Les illustrés sont gratuits ; les avatars photo s’animent par IA.</p></div>
-    <div class="row" style="flex-wrap:wrap"><button class="btn lg" data-act="newPhotoAvatar">${ic('spark')}Avatar photo réaliste</button><button class="btn primary lg" data-act="newIllustrated">${ic('plus')}Présentateur illustré</button></div></header>
+    <div class="row" style="flex-wrap:wrap"><button class="btn lg" data-act="newPhotoAvatar">${ic('spark')}Avatar photo réaliste</button><button class="btn lg" data-act="newIllustrated">${ic('edit')}Créer de zéro</button><button class="btn primary lg" data-act="gallery">${ic('avatars')}Galerie de personnages</button></div></header>
   <div class="grid">
-    <button class="new-card" data-act="newIllustrated"><span class="plus">${ic('avatars')}</span>Créer un présentateur<span class="hint">Gratuit, illimité</span></button>
+    <button class="new-card" data-act="gallery"><span class="plus">${ic('avatars')}</span>Choisir dans la galerie<span class="hint">${PRESETS.length} personnages cartoon, gratuits et personnalisables</span></button>
     ${state.avatars.map((a) => `<article class="card"><button class="card-open" data-act="editAvatar" data-id="${a.id}" data-hover>
       <div class="thumb">${a.kind === 'photo' ? `<img data-media="${a.data.photo}" alt="">` : '<canvas></canvas>'}<span class="badge fmt">${a.kind === 'photo' ? 'Réaliste, IA' : 'Illustré'}</span></div>
-      <div class="card-body"><strong>${esc(a.name)}</strong><span class="card-meta">${a.kind === 'photo' ? 'Vidéo générée par fal.ai, environ 0,06 $ par seconde' : 'Animé gratuitement par Cadence'}</span></div></button></article>`).join('')}
+      <div class="card-body"><strong>${esc(a.name)}</strong><span class="card-meta">${a.kind === 'photo' ? 'Vidéo générée par fal.ai, environ 0,06 $ par seconde' : `${esc(OPTIONS.species[normChar(a.data.config).species])}, style ${esc(OPTIONS.style[normChar(a.data.config).style].toLowerCase())}`}</span></div></button></article>`).join('')}
   </div>
   ${!state.ai.configured ? `<div class="panel" style="margin-top:24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:240px"><h3>Avatars réalistes et voix IA</h3><p class="muted">Ajoute une clé fal.ai dans les Réglages pour faire parler une photo et générer des voix à partir d’un texte. Tu ne paies que ce que tu génères.</p></div><a class="btn" href="#/reglages">${ic('settings')}Configurer</a></div>` : ''}`;
 AFTER.avatars = async () => {
@@ -630,56 +630,72 @@ AFTER.avatars = async () => {
   $$('[data-act="editAvatar"]').forEach((b) => {
     const a = state.avatars.find((x) => x.id === b.dataset.id);
     const c = b.querySelector('canvas');
-    if (c) live(c, { project: presenterPreview(avatarData(a)), brand, assets: { logo: null, images: {} }, hoverOnly: true, hero: 1.2 });
+    if (c) live(c, { project: presenterPreview(avatarData(a), 'plein', undefined, false), brand, assets: { logo: null, images: {} }, hoverOnly: true, hero: 1.2 });
   });
   $$('img[data-media]').forEach(async (img) => { try { img.src = await mediaSrc(img.dataset.media); } catch { /* rien */ } });
 };
 
-function illustratedDialog(id = null, onSaved) {
+const SPECIES_SKIN = { humain: '#DDA67F', robot: '#9AA7B8', chat: '#F2A65A', renard: '#E07B39', ours: '#8C5A3C' };
+const CHAR_TABS = [['perso', 'Personnage'], ['visage', 'Visage'], ['cheveux', 'Cheveux'], ['tenue', 'Tenue'], ['acc', 'Accessoires']];
+function charControls(cfg, tab) {
+  const human = cfg.species === 'humain', robot = cfg.species === 'robot';
+  const chips = (k) => `<div class="chips">${Object.entries(OPTIONS[k]).map(([v, l]) => `<button type="button" class="chip ${cfg[k] === v ? 'on' : ''}" data-opt="${k}" data-v="${v}">${esc(l)}</button>`).join('')}</div>`;
+  const sw = (k, list) => `<div class="swatch-row">${list.map((c) => `<button type="button" class="swatch" style="--sc:${c}" data-opt="${k}" data-v="${c}" aria-pressed="${cfg[k] === c}" aria-label="${c}"></button>`).join('')}</div>`;
+  const tog = (k, l) => `<label class="switch"><input type="checkbox" data-tog="${k}" ${cfg[k] ? 'checked' : ''}>${l}</label>`;
+  const F = (label, html) => `<div class="field"><span>${label}</span>${html}</div>`;
+  if (tab === 'perso') return F('Espèce', chips('species')) + F('Style de dessin', chips('style')) + F(human ? 'Teint' : robot ? 'Métal' : 'Pelage', sw('skin', human ? SKINS : FURS));
+  if (tab === 'visage') return (human ? F('Forme du visage', chips('face')) : '') + (robot ? '' : F('Yeux', chips('eyes'))) + F(robot ? 'Couleur des écrans' : 'Couleur des yeux', sw('eyeColor', EYE_COLORS))
+    + (robot ? '' : F('Sourcils', chips('brows')) + (human ? F('Nez', chips('nose')) : '') + F('Bouche au repos', chips('mouth')) + `<div class="row" style="gap:18px;flex-wrap:wrap">${tog('blush', 'Joues roses')}${human ? tog('freckles', 'Taches de rousseur') : ''}</div>`);
+  if (tab === 'cheveux') return human ? F('Coiffure', chips('hair')) + F('Couleur', sw('hairColor', HAIR_COLORS)) : '<p class="muted">Pas de cheveux pour les mascottes, mais elles peuvent porter un bonnet, une casquette ou un casque dans Accessoires.</p>';
+  if (tab === 'tenue') return F('Vêtement', chips('outfitType')) + F('Couleur', `<div class="row" style="flex-wrap:wrap;gap:8px"><button type="button" class="chip ${cfg.outfit === 'marque' ? 'on' : ''}" data-opt="outfit" data-v="marque">Couleurs du client</button>${OUTFIT_COLORS.map((c) => `<button type="button" class="swatch" style="--sc:${c}" data-outfit-color="${c}" aria-pressed="${cfg.outfit !== 'marque' && cfg.outfitColor === c}" aria-label="${c}"></button>`).join('')}</div>`)
+    + '<p class="hint">« Couleurs du client » habille le personnage avec la charte de chaque vidéo.</p>';
+  return F('Lunettes', chips('glasses')) + F('Sur la tête', chips('hat')) + (human ? F('Barbe', chips('beard')) + tog('earrings', 'Boucles d’oreilles') : '');
+}
+function illustratedDialog(id = null, onSaved, preset = null) {
   const a = id ? state.avatars.find((x) => x.id === id) : null;
-  const cfg = structuredClone({ ...DEFAULT_CHAR, ...(a?.data.config || {}) });
+  const cfg = normChar(structuredClone(a?.data.config || preset?.config || DEFAULT_CHAR));
   const brand = brandOf(ed ? P().clientId : state.clients[0]?.id);
-  let L = null;
-  const sw = (k, list) => `<div class="swatch-row">${list.map((c) => `<button type="button" class="swatch" style="--sc:${c}" data-sw="${k}" data-v="${c}" aria-pressed="${cfg[k] === c}" aria-label="${c}"></button>`).join('')}</div>`;
+  let tab = 'perso', L = null;
   openModal(`<form class="dlg" data-local autocomplete="off">
-    <div class="dlg-head"><div><h2>${a ? esc(a.name) : 'Nouveau présentateur illustré'}</h2><p>Gratuit et illimité. Il bouge, cligne des yeux et parle au rythme de la voix.</p></div><button class="icon-btn" type="button" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="dlg-head"><div><h2>${a ? esc(a.name) : preset ? `Personnaliser ${esc(preset.name)}` : 'Créer un personnage'}</h2><p>Gratuit et illimité. Il bouge, cligne des yeux, fait des gestes et parle au rythme de la voix.</p></div><button class="icon-btn" type="button" data-close aria-label="Fermer">${ic('x')}</button></div>
     <div class="brand-editor">
-      <div style="display:grid;gap:16px;align-content:start">
-        <label class="field"><span>Nom</span><input name="name" value="${esc(a?.name || 'Présentateur')}" required ${a ? '' : 'autofocus'}></label>
-        <div class="field"><span>Teint</span>${sw('skin', SKINS)}</div>
-        <div class="field"><span>Coiffure</span><div class="chips">${Object.entries(HAIR_STYLES).map(([k, l]) => `<button type="button" class="chip ${cfg.hair === k ? 'on' : ''}" data-hair="${k}">${l}</button>`).join('')}</div></div>
-        <div class="field"><span>Couleur des cheveux</span>${sw('hairColor', HAIR_COLORS)}</div>
-        <div class="field"><span>Tenue</span><div class="row" style="flex-wrap:wrap"><div class="segmented"><button type="button" data-outfit="marque" aria-pressed="${cfg.outfit === 'marque'}">Couleur du client</button><button type="button" data-outfit="perso" aria-pressed="${cfg.outfit !== 'marque'}">Personnalisée</button></div>
-          <span class="color-pick" style="width:150px" ${cfg.outfit === 'marque' ? 'hidden' : ''} id="outfitPick"><input type="color" name="outfitColor" value="${esc(cfg.outfitColor)}" aria-label="Couleur de la tenue"><span class="hint">Tenue</span></span></div></div>
-        <div class="row" style="flex-wrap:wrap;gap:18px"><label class="switch"><input type="checkbox" name="glasses" ${cfg.glasses ? 'checked' : ''}>Lunettes</label><label class="switch"><input type="checkbox" name="beard" ${cfg.beard ? 'checked' : ''}>Barbe</label><label class="switch"><input type="checkbox" name="earrings" ${cfg.earrings ? 'checked' : ''}>Boucles d’oreilles</label></div>
+      <div style="display:grid;gap:14px;align-content:start;min-width:0">
+        <div class="row"><label class="field" style="flex:1"><span>Nom</span><input name="name" value="${esc(a?.name || preset?.name || 'Présentateur')}" required></label>
+          <button type="button" class="btn" data-random style="align-self:flex-end" title="Tirer un personnage au hasard">${ic('spark')}Aléatoire</button></div>
+        <div class="segmented char-tabs" role="tablist">${CHAR_TABS.map(([k, l]) => `<button type="button" role="tab" data-tab="${k}" aria-pressed="${k === tab}">${l}</button>`).join('')}</div>
+        <div class="char-panel" id="charPanel">${charControls(cfg, tab)}</div>
       </div>
-      <div class="brand-preview"><div class="stage-box"><canvas id="charCanvas"></canvas></div><p class="hint">Aperçu en mouvement, aux couleurs de ${esc(brand.name)}.</p></div>
+      <div class="brand-preview"><div class="stage-box"><canvas id="charCanvas"></canvas></div><p class="hint">Aperçu en mouvement, aux couleurs de ${esc(brand.name)}.</p>
+        <div class="segmented" id="prevLayout"><button type="button" data-pl="plein" aria-pressed="true">Plein cadre</button><button type="button" data-pl="cote" aria-pressed="false">À côté du contenu</button><button type="button" data-pl="medaillon" aria-pressed="false">Médaillon</button></div></div>
     </div>
-    <div class="dlg-foot">${a ? `<button class="btn ghost danger" type="button" data-del-avatar>${ic('trash')}Supprimer</button>` : ''}<span class="spacer"></span><button class="btn" type="button" data-close>Annuler</button><button class="btn primary">${a ? 'Enregistrer' : 'Créer le présentateur'}</button></div>
+    <div class="dlg-foot">${a ? `<button class="btn ghost danger" type="button" data-del-avatar>${ic('trash')}Supprimer</button>` : ''}<span class="spacer"></span><button class="btn" type="button" data-close>Annuler</button><button class="btn primary">${a ? 'Enregistrer' : 'Ajouter à mes avatars'}</button></div>
   </form>`, {
     size: 'wide',
     onMount: async (m) => {
       await V.ensureFonts(brand);
-      const prev = () => presenterPreview({ kind: 'illustre', config: cfg });
+      let layout = 'plein';
+      const prev = () => presenterPreview({ kind: 'illustre', config: { ...cfg } }, layout);
       L = live($('#charCanvas', m), { project: prev(), brand, assets: { logo: null, images: {} } });
-      const upd = () => { L.project = prev(); };
+      const upd = (panel = false) => { L.project = prev(); if (panel) $('#charPanel', m).innerHTML = charControls(cfg, tab); };
       const form = $('form', m);
       form.addEventListener('click', async (e) => {
-        const swb = e.target.closest('[data-sw]'), hb = e.target.closest('[data-hair]'), ob = e.target.closest('[data-outfit]');
-        if (swb) { cfg[swb.dataset.sw] = swb.dataset.v; $$(`[data-sw="${swb.dataset.sw}"]`, m).forEach((x) => x.setAttribute('aria-pressed', x === swb)); upd(); }
-        if (hb) { cfg.hair = hb.dataset.hair; $$('[data-hair]', m).forEach((x) => x.classList.toggle('on', x === hb)); upd(); }
-        if (ob) { cfg.outfit = ob.dataset.outfit === 'marque' ? 'marque' : 'perso'; $$('[data-outfit]', m).forEach((x) => x.setAttribute('aria-pressed', x === ob)); $('#outfitPick', m).hidden = cfg.outfit === 'marque'; upd(); }
+        const o = e.target.closest('[data-opt]'), tb = e.target.closest('[data-tab]'), oc = e.target.closest('[data-outfit-color]'), pl = e.target.closest('[data-pl]');
+        if (o) {
+          const k = o.dataset.opt, v = o.dataset.v;
+          cfg[k] = v;
+          if (k === 'species') { cfg.skin = SPECIES_SKIN[v]; if (v !== 'humain') { cfg.brows = 'aucun'; cfg.beard = 'aucune'; cfg.earrings = false; } else if (cfg.brows === 'aucun') cfg.brows = 'fins'; if (v === 'robot') cfg.eyeColor = '#4CD3FF'; }
+          upd(true);
+        }
+        if (oc) { cfg.outfit = 'perso'; cfg.outfitColor = oc.dataset.outfitColor; upd(true); }
+        if (tb) { tab = tb.dataset.tab; $$('[data-tab]', m).forEach((x) => x.setAttribute('aria-pressed', x === tb)); upd(true); }
+        if (pl) { layout = pl.dataset.pl; $$('[data-pl]', m).forEach((x) => x.setAttribute('aria-pressed', x === pl)); upd(); }
+        if (e.target.closest('[data-random]')) { Object.assign(cfg, randomChar()); upd(true); }
         if (e.target.closest('[data-del-avatar]')) {
           if (!(await confirmBox({ title: `Supprimer ${a.name} ?`, text: 'Les scènes qui l’utilisent garderont son apparence actuelle.', ok: 'Supprimer', danger: true }))) return;
           await api(`/api/avatars/${a.id}`, { method: 'DELETE' }); await loadAll(); if (!ed) route(); toast('Avatar supprimé');
         }
       });
-      form.addEventListener('input', (e) => {
-        const el = e.target;
-        if (['glasses', 'beard', 'earrings'].includes(el.name)) cfg[el.name] = el.checked;
-        if (el.name === 'outfitColor') cfg.outfitColor = el.value;
-        upd();
-      });
+      form.addEventListener('change', (e) => { if (e.target.dataset.tog) { cfg[e.target.dataset.tog] = e.target.checked; upd(); } });
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const name = form.name.value.trim() || 'Présentateur', btn = form.querySelector('.btn.primary'); btn.disabled = true;
@@ -689,8 +705,48 @@ function illustratedDialog(id = null, onSaved) {
           else newId = (await api('/api/avatars', { method: 'POST', body: { name, kind: 'illustre', data: { config: cfg } } })).id;
           await loadAll(); closeModal(); if (!ed) route();
           onSaved?.(state.avatars.find((x) => x.id === newId));
-          toast(a ? 'Présentateur enregistré' : `${name} est prêt`, 'ok');
+          toast(a ? 'Personnage enregistré' : `${name} a rejoint tes avatars`, 'ok');
         } catch (ex) { btn.disabled = false; toast(ex.message, 'error'); }
+      });
+    },
+  });
+}
+function galleryDialog(onAdded) {
+  const sel = new Set();
+  const brand = brandOf(ed ? P().clientId : state.clients[0]?.id);
+  openModal(`<div class="dlg">
+    <div class="dlg-head"><div><h2>Galerie de personnages</h2><p>Sélectionne un ou plusieurs personnages : ils rejoignent tes avatars, prêts à être utilisés et personnalisés. Survole pour les voir parler.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="gal-grid">${PRESETS.map((p, i) => `<div class="gal-card" data-hover>
+      <button type="button" class="gal-pick" data-pick="${i}" aria-pressed="false" aria-label="Sélectionner ${esc(p.name)}"><canvas></canvas><span class="gal-check">${ic('check')}</span></button>
+      <div class="gal-meta"><div><strong>${esc(p.name)}</strong><span>${esc(p.role)}</span></div><button type="button" class="btn ghost" data-custom="${i}" title="Personnaliser avant d’ajouter">${ic('edit')}</button></div></div>`).join('')}</div>
+    <div class="dlg-foot"><button class="btn ghost" data-all>Tout sélectionner</button><span class="spacer"></span><button class="btn" data-close>Annuler</button><button class="btn primary" data-add disabled>Choisis des personnages</button></div></div>`, {
+    size: 'wide',
+    onMount: async (m) => {
+      await V.ensureFonts(brand);
+      $$('.gal-card', m).forEach((card, i) => live(card.querySelector('canvas'), { project: presenterPreview({ kind: 'illustre', config: PRESETS[i].config }, 'plein', 'Bonjour, je suis ' + PRESETS[i].name + ' !', false), brand, assets: { logo: null, images: {} }, hoverOnly: true, hero: 1.4, format: '1:1' }));
+      const addBtn = $('[data-add]', m);
+      const refresh = () => {
+        $$('[data-pick]', m).forEach((b) => b.setAttribute('aria-pressed', sel.has(+b.dataset.pick)));
+        addBtn.disabled = !sel.size; addBtn.textContent = sel.size ? `Ajouter ${plural(sel.size, 'personnage', 'personnages')}` : 'Choisis des personnages';
+      };
+      m.querySelector('.dlg').addEventListener('click', async (e) => {
+        const pk = e.target.closest('[data-pick]'), cu = e.target.closest('[data-custom]');
+        if (pk) { const i = +pk.dataset.pick; sel.has(i) ? sel.delete(i) : sel.add(i); refresh(); }
+        if (cu) illustratedDialog(null, onAdded, PRESETS[+cu.dataset.custom]);
+        if (e.target.closest('[data-all]')) { if (sel.size === PRESETS.length) sel.clear(); else PRESETS.forEach((_, i) => sel.add(i)); refresh(); }
+        if (e.target.closest('[data-add]') && sel.size) {
+          addBtn.disabled = true; addBtn.textContent = 'Ajout…';
+          try {
+            const ids = [];
+            for (const i of [...sel].sort((x, y) => x - y)) {
+              const p = PRESETS[i];
+              ids.push((await api('/api/avatars', { method: 'POST', body: { name: p.name, kind: 'illustre', data: { config: p.config } } })).id);
+            }
+            await loadAll(); closeModal(); if (!ed) route();
+            onAdded?.(state.avatars.find((x) => x.id === ids[0]));
+            toast(`${plural(ids.length, 'personnage ajouté', 'personnages ajoutés')} à tes avatars`, 'ok');
+          } catch (ex) { toast(ex.message, 'error'); refresh(); }
+        }
       });
     },
   });
@@ -862,6 +918,7 @@ const ACT = {
   editClient: (el) => brandDialog(el.dataset.id),
   useTpl: (el) => newVideoDialog(el.dataset.tpl),
   newIllustrated: () => illustratedDialog(),
+  gallery: () => galleryDialog(),
   newPhotoAvatar: () => photoAvatarDialog(),
   editAvatar: (el) => { const a = state.avatars.find((x) => x.id === el.dataset.id); if (a?.kind === 'photo') photoAvatarDialog(a.id); else illustratedDialog(el.dataset.id); },
   logout: async () => { try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* rien */ } history.replaceState(null, '', location.pathname); authScreen('login'); },
@@ -1296,9 +1353,11 @@ function onEdClick(e) {
   else if (a === 'newAvatar') {
     const onSaved = (av) => { if (!av || !ed) return; beforeChange(); curScene().props.avatar = avatarData(av); reloadAssets().then(() => changed({ clip: ed.sel, inspector: true })); };
     openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Nouvel avatar</h2><p>Quel type de présentateur ?</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
-      <div class="source-row"><button class="source-btn" data-kind="illustre">${ic('avatars')}Présentateur illustré<span>Gratuit, animé par Cadence, à tes couleurs</span></button>
-      <button class="source-btn" data-kind="photo">${ic('spark')}Avatar photo réaliste<span>Une vraie personne qui parle, générée par IA</span></button></div></div>`, {
-      onMount: (m) => $$('[data-kind]', m).forEach((x) => x.addEventListener('click', () => (x.dataset.kind === 'photo' ? photoAvatarDialog(null, onSaved) : illustratedDialog(null, onSaved)))),
+      <div class="source-row three"><button class="source-btn" data-kind="galerie">${ic('avatars')}Galerie<span>${PRESETS.length} personnages cartoon prêts à l’emploi</span></button>
+      <button class="source-btn" data-kind="illustre">${ic('edit')}Créer de zéro<span>Espèce, visage, cheveux, tenue, accessoires</span></button>
+      <button class="source-btn" data-kind="photo">${ic('spark')}Photo réaliste<span>Une vraie personne qui parle, par IA</span></button></div></div>`, {
+      size: 'mid',
+      onMount: (m) => $$('[data-kind]', m).forEach((x) => x.addEventListener('click', () => (x.dataset.kind === 'photo' ? photoAvatarDialog(null, onSaved) : x.dataset.kind === 'galerie' ? galleryDialog(onSaved) : illustratedDialog(null, onSaved)))),
     });
   }
   else if (a === 'recordVoice' && s) { const sid = s.id; recordDialog(s.props.script).then(async (wav) => { if (wav) await storeVoice(sid, wav, 'voix-enregistree'); }); }

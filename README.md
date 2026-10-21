@@ -11,7 +11,7 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
 - **4 formats** : 16:9 (YouTube), 9:16 (Reels, TikTok), 1:1 et 4:5 (feeds). Un clic pour passer de l’un à l’autre.
 - **Export MP4** : de 720p à 4K, 30 ou 60 images/s, avec musique en option (fondu automatique), plusieurs formats en une fois.
 - **Avatars présentateurs** :
-  - **Illustrés, gratuits et illimités** : teint, coiffure, couleur des cheveux, tenue aux couleurs du client, lunettes, barbe, boucles d’oreilles. Ils respirent, clignent des yeux, bougent la tête, gesticulent, et leur bouche suit la voix.
+  - **Personnages cartoon, gratuits et illimités** : une galerie de 16 personnages prêts à l’emploi (sélection multiple), et un personnalisateur complet. 5 espèces (humain, robot, chat, renard, ours), 3 styles de dessin (classique, mascotte, contour BD), forme du visage, yeux, sourcils, nez, bouche, 11 coiffures, 5 tenues (couleurs du client ou au choix), lunettes, casquette, bonnet, casque audio, barbes, et un bouton « Aléatoire ». Ils respirent, clignent des yeux, bougent la tête, gesticulent, et leur bouche suit la voix.
   - **Réalistes par IA, en option** : une photo devient une personne qui parle (Kling Avatar v2 via fal.ai, environ 0,056 $ par seconde en Standard, 0,115 $ en Pro).
 - **Voix** : enregistrement au micro directement dans l’éditeur, import d’un fichier audio, ou voix IA à partir du texte (ElevenLabs via fal.ai, environ 0,10 $ pour 1 000 caractères).
 - **Scène Présentateur** : avatar à côté du contenu, en médaillon ou plein cadre ; les points s’affichent au fil de la voix ; sous-titres synchronisés ; durée calée automatiquement sur la voix.
@@ -57,7 +57,7 @@ public/
   index.html, styles.css   Interface
   app.js                   Écrans, éditeur, export
   engine.js                Moteur d’animation, mixage audio et encodage MP4
-  avatar.js                Présentateur illustré animé
+  avatar.js                Personnages cartoon animés et galerie
   vendor/mp4-muxer.mjs     Multiplexeur MP4 (MIT)
 worker/index.js            API Cloudflare : accès, clients, projets, avatars, médias, IA, exports
 wrangler.jsonc             Configuration Cloudflare (Worker + D1)
