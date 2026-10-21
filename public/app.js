@@ -1092,7 +1092,7 @@ function stopEditor() {
   cancelAnimationFrame(ed.raf); ed.ro?.disconnect(); clearInterval(ed.jobTimer);
   Object.values(ed.assets.voices || {}).forEach((v) => v.el.pause());
   Object.values(ed.assets.videos || {}).forEach((v) => v.pause());
-  ed.assets.music?.el?.pause(); stopListen();
+  ed.assets?.music?.el?.pause(); stopListen(); stopClipAudio();
   removeEventListener('keydown', ed.onKey);
   ed = null;
 }
@@ -1201,7 +1201,7 @@ function loop(ts) {
   if (ed.playing) {
     playSfxBetween(ed.time, ed.time + dt);
     ed.time += dt;
-    if (ed.time >= total) { if (ed.loop) ed.time = 0; else { ed.time = total; setPlaying(false); } }
+    if (ed.time >= total) { if (ed.loop) { ed.time = 0; startClipAudio(0); } else { ed.time = total; setPlaying(false); } }
     ed.dirty = true;
   }
   V.syncPreview(projForRender(), ed.assets, ed.time, ed.playing, () => { if (ed) ed.dirty = true; });
@@ -1229,10 +1229,11 @@ function setPlaying(v) {
   ed.playing = v;
   const total = V.timeline(projForRender()).total;
   if (v && ed.time >= total - 0.05) ed.time = 0;
+  if (v) startClipAudio(ed.time); else stopClipAudio();
   const b = $('#playBtn'); if (b) { b.innerHTML = ic(v ? 'pause' : 'play'); b.setAttribute('aria-label', v ? 'Pause' : 'Lecture'); }
   ed.last = 0;
 }
-function seek(t) { const total = V.timeline(projForRender()).total; ed.time = clamp(t, 0, total); ed.dirty = true; }
+function seek(t) { const total = V.timeline(projForRender()).total; ed.time = clamp(t, 0, total); ed.dirty = true; if (ed.playing) startClipAudio(ed.time); }
 function seekScene(i) { const it = V.timeline(projForRender()).items[i]; if (it) seek(it.start + (it.tr || 0) + Math.min(1.6, (+it.scene.duration || 4) * 0.4)); }
 
 function renderScrub() {
@@ -1349,7 +1350,204 @@ function aiVideoSection(s) {
   return `<div class="insp-sec"><div class="label">Vidéo IA de l’avatar</div>${body}</div>`;
 }
 /* =========================================================
+   Clips audio libres : aperçu, découpe, menu contextuel, ajout de voix
+   ========================================================= */
+const clipPlayer = { ctx: null, nodes: [] };
+function stopClipAudio() { for (const n of clipPlayer.nodes) { try { n.stop(); } catch { /* rien */ } } clipPlayer.nodes = []; }
+function startClipAudio(t0) {
+  stopClipAudio();
+  if (!ed) return;
+  const proj = projForRender(), clips = V.audioClipsOf(proj);
+  if (!clips.length) return;
+  const ctx = clipPlayer.ctx ||= new AudioContext(); ctx.resume();
+  const now = ctx.currentTime + 0.04;
+  const spans = clips.filter((c) => c.kind === 'voice').map((c) => [+c.at, +c.at + +c.dur]);
+  for (const it of V.timeline(proj).items) { const p = it.scene.props || {}; const vo = p.voice && ed.assets.voices?.[p.voice]; if (vo) { const a = it.start + V.voiceDelayOf(it.scene); spans.push([a, a + vo.duration]); } }
+  spans.sort((x, y) => x[0] - y[0]);
+  for (const c of clips) {
+    const buf = ed.assets.audioClips?.[c.media || `track:${c.track}`]; if (!buf) continue;
+    const st = +c.at || 0, en = st + (+c.dur || 0); if (en <= t0 + 0.01) continue;
+    const from = Math.max(st, t0), wait = from - t0, offs = (+c.offset || 0) + (from - st), len = Math.min(en - from, buf.duration - offs);
+    if (len <= 0.01) continue;
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const g = ctx.createGain(), vol = clamp(c.volume ?? 1, 0, 1.5), T0 = now + wait;
+    const fi = from === st ? Math.min(Math.max(0.005, c.fadeIn || 0.005), len / 2) : 0.01, fo = Math.min(Math.max(0.005, c.fadeOut || 0.005), len / 2);
+    g.gain.setValueAtTime(0, T0); g.gain.linearRampToValueAtTime(vol, T0 + fi);
+    let last = T0 + fi;
+    if (c.kind === 'music' && c.duck !== false) for (const [a, b] of spans) {
+      if (b < from || a > en) continue;
+      const A0 = Math.max(last + 0.01, now + (a - t0) - 0.3), A1 = Math.max(A0 + 0.01, now + (a - t0)), B0 = Math.max(A1 + 0.01, now + (b - t0)), B1 = B0 + 0.4;
+      g.gain.setValueAtTime(vol, A0); g.gain.linearRampToValueAtTime(vol * 0.25, A1); g.gain.setValueAtTime(vol * 0.25, B0); g.gain.linearRampToValueAtTime(vol, B1); last = B1;
+    }
+    g.gain.setValueAtTime(vol, Math.max(last + 0.005, T0 + len - fo)); g.gain.linearRampToValueAtTime(0, Math.max(last + 0.01, T0 + len));
+    src.connect(g); g.connect(ctx.destination); src.start(T0, offs, len + 0.01);
+    clipPlayer.nodes.push(src);
+  }
+}
+
+const XF = 0.03;
+/** Coupe un élément audio (ou un clip vidéo) à l'instant t de la vidéo, avec un micro-fondu de chaque côté. */
+function splitAudioAt(kind, id, t) {
+  if (kind === 'presenter' || kind === 'music') { const nid = convertToClip(kind, id); if (!nid) return; kind = 'aclip'; id = nid; }
+  if (kind === 'aclip') {
+    const list = P().data.audio || [], c = list.find((x) => x.id === id); if (!c) return;
+    const st = +c.at, en = st + +c.dur;
+    if (t <= st + 0.1 || t >= en - 0.1) { toast('Place la coupe à l’intérieur du morceau.'); return; }
+    beforeChange();
+    const right = { ...structuredClone(c), id: uid(), at: Math.round(t * 1000) / 1000, dur: Math.round((en - t) * 1000) / 1000, offset: Math.round(((+c.offset || 0) + (t - st)) * 1000) / 1000, fadeIn: XF };
+    c.dur = Math.round((t - st) * 1000) / 1000; c.fadeOut = XF;
+    list.splice(list.indexOf(c) + 1, 0, right);
+    ed.audioSel = { kind: 'aclip', id: right.id };
+    reloadAssets().then(() => { changed({ inspector: true }); renderAudio(); });
+    toast('Coupé. Les deux morceaux se déplacent et se règlent séparément.', 'ok');
+    return;
+  }
+  if (kind === 'clip') {
+    for (const [i, sc] of scenesOf().entries()) {
+      const el = (sc.elements || []).find((x) => x.id === id); if (!el) continue;
+      const it = V.timeline(projForRender()).items[i], lt = t - it.start, st0 = +el.start || 0, en0 = el.end == null ? +sc.duration : el.end;
+      if (lt <= st0 + 0.1 || lt >= en0 - 0.1) { toast('Place la coupe à l’intérieur du clip.'); return; }
+      beforeChange();
+      const c = structuredClone(el); c.id = V.newElement('video').id;
+      el.end = Math.round(lt * 100) / 100; c.start = el.end; c.trimIn = Math.round(((+el.trimIn || 0) + (lt - st0) * (el.speed || 1)) * 100) / 100;
+      c.anim = { ...c.anim, in: 'none', inDelay: 0 }; el.anim = { ...el.anim, out: 'none' };
+      sc.elements.push(c); ed.audioSel = { kind: 'clip', id: c.id };
+      changed({ film: true, inspector: true }); renderTracks(); renderAudio(); toast('Clip vidéo coupé en deux', 'ok');
+      return;
+    }
+  }
+}
+/** Transforme la voix d'un présentateur ou la musique globale en clips libres (pour les couper). */
+function convertToClip(kind, id) {
+  const audio = (P().data.audio ||= []);
+  if (kind === 'presenter') {
+    const it = V.timeline(projForRender()).items.find((x) => x.scene.id === id); if (!it) return null;
+    const p = it.scene.props, vo = ed.assets.voices?.[p.voice]; if (!vo) return null;
+    beforeChange();
+    const c = { id: uid(), kind: 'voice', media: p.voice, name: `Voix de la scène ${it.index + 1}`, at: Math.round((it.start + V.voiceDelayOf(it.scene)) * 1000) / 1000, dur: Math.round(vo.duration * 1000) / 1000, offset: 0, volume: p.voiceVol ?? 1, fadeIn: 0.01, fadeOut: 0.05 };
+    audio.push(c); p.voice = ''; delete p.voiceDelay; delete p.voiceVol;
+    return c.id;
+  }
+  const m = P().data.music; if (!m) return null;
+  beforeChange();
+  const ms = V.musicSettings(projForRender(), V.timeline(projForRender()).total);
+  const c = { id: uid(), kind: 'music', ...(m.kind === 'library' ? { track: m.track } : { media: m.media }), name: musicLabel(), at: ms.at, dur: Math.round((ms.end - ms.at) * 1000) / 1000, offset: ms.offset, volume: ms.volume, fadeIn: ms.fadeIn, fadeOut: ms.fadeOut, duck: ms.duck };
+  audio.push(c); delete P().data.music;
+  return c.id;
+}
+function deleteAudioItem(kind, id) {
+  beforeChange();
+  if (kind === 'aclip') P().data.audio = (P().data.audio || []).filter((c) => c.id !== id);
+  else if (kind === 'presenter') { const sc = scenesOf().find((x) => x.id === id); if (sc) { sc.props.voice = ''; sc.props.video = ''; } }
+  else if (kind === 'music') delete P().data.music;
+  else if (kind === 'sfx') { const el = V.allElements(projForRender()).find((x) => x.el.id === id)?.el; if (el) el.anim.sfx = ''; }
+  else if (kind === 'clip') for (const sc of scenesOf()) sc.elements = (sc.elements || []).filter((x) => x.id !== id);
+  ed.audioSel = null;
+  reloadAssets().then(() => { refreshMusicChip(); changed({ film: true, inspector: true }); renderAudio(); renderTracks(); });
+}
+function contextMenu(x, y, items) {
+  closeContextMenu();
+  const m = document.createElement('div'); m.className = 'ctx-menu'; m.id = 'ctxMenu';
+  m.innerHTML = items.map((it, i) => (it === '-' ? '<hr>' : `<button data-i="${i}" ${it.danger ? 'class="danger"' : ''}>${it.icon ? ic(it.icon) : '<i></i>'}<span>${esc(it.label)}</span>${it.key ? `<kbd>${it.key}</kbd>` : ''}</button>`)).join('');
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`; m.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
+  m.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (!b) return; closeContextMenu(); items[+b.dataset.i].run(); });
+  setTimeout(() => addEventListener('pointerdown', closeOnOutside, true), 0);
+}
+function closeOnOutside(e) { if (!e.target.closest('#ctxMenu')) closeContextMenu(); }
+function closeContextMenu() { $('#ctxMenu')?.remove(); removeEventListener('pointerdown', closeOnOutside, true); }
+function audioMenu(e, kind, id, t) {
+  const tt = Math.round(t * 100) / 100;
+  const cut = { icon: 'scissors', label: `Couper ici (${fmtTime(tt)})`, key: 'Ctrl+B', run: () => splitAudioAt(kind === 'voice' ? 'presenter' : kind, id, tt) };
+  const listenHere = { icon: 'play', label: 'Écouter à partir d’ici', run: () => { setPlaying(false); seek(Math.max(0, tt - 0.3)); setPlaying(true); } };
+  const del = { icon: 'trash', label: 'Supprimer', danger: true, run: () => deleteAudioItem(kind === 'voice' ? 'presenter' : kind, id) };
+  let items = null;
+  if (kind === 'aclip') {
+    const c = (P().data.audio || []).find((x) => x.id === id); if (!c) return;
+    items = [cut, listenHere, '-',
+      { icon: 'copy', label: 'Dupliquer à la suite', run: () => { beforeChange(); const d = { ...structuredClone(c), id: uid(), at: Math.round((+c.at + +c.dur) * 1000) / 1000 }; P().data.audio.push(d); ed.audioSel = { kind: 'aclip', id: d.id }; changed({}); renderAudio(); } },
+      { icon: 'speaker', label: (c.fadeIn || 0) > 0.1 ? 'Retirer le fondu d’entrée' : 'Fondu d’entrée (0,5 s)', run: () => { beforeChange(); c.fadeIn = (c.fadeIn || 0) > 0.1 ? XF : 0.5; changed({}); renderAudio(); } },
+      { icon: 'speaker', label: (c.fadeOut || 0) > 0.1 ? 'Retirer le fondu de sortie' : 'Fondu de sortie (0,8 s)', run: () => { beforeChange(); c.fadeOut = (c.fadeOut || 0) > 0.1 ? XF : 0.8; changed({}); renderAudio(); } },
+      { icon: 'start', label: 'Caler le début sur la tête de lecture', run: () => { beforeChange(); c.at = Math.round(ed.time * 100) / 100; changed({}); renderAudio(); } },
+      '-', del];
+  } else if (kind === 'voice') items = [cut, listenHere, '-', { icon: 'layers', label: 'Détacher en voix libre', run: () => { if (convertToClip('presenter', id)) reloadAssets().then(() => { changed({ inspector: true }); renderAudio(); toast('La voix est maintenant un clip libre de la timeline', 'ok'); }); } }, '-', del];
+  else if (kind === 'music') items = [cut, listenHere, '-', { icon: 'layers', label: 'Transformer en morceau libre', run: () => { if (convertToClip('music')) reloadAssets().then(() => { refreshMusicChip(); changed({ inspector: true }); renderAudio(); }); } }, '-', del];
+  else if (kind === 'clip') {
+    const el = V.allElements(projForRender()).find((x) => x.el.id === id)?.el; if (!el) return;
+    items = [cut, listenHere, '-', { icon: 'speaker', label: el.muted ? 'Rétablir le son du clip' : 'Couper le son du clip', run: () => { beforeChange(); el.muted = !el.muted; reloadAssets(); changed({ inspector: true }); renderAudio(); } }, '-', { ...del, label: 'Supprimer le clip vidéo' }];
+  } else if (kind === 'sfx') items = [{ icon: 'play', label: 'Écouter', run: () => { const el = V.allElements(projForRender()).find((x) => x.el.id === id)?.el; if (el?.anim?.sfx) renderSfx(el.anim.sfx).then((b) => playBuffer(b, el.anim.sfxVol ?? 0.7)); } }, '-', { ...del, label: 'Retirer le bruitage' }];
+  if (items) contextMenu(e.clientX, e.clientY, items);
+}
+
+/* Ajouter une voix libre (sans présentateur) */
+function addVoiceDialog() {
+  const at = Math.round(ed.time * 100) / 100;
+  let busy = false;
+  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Ajouter une voix off</h2><p>Elle sera posée sur la timeline audio à ${fmtTime(at)}, à la tête de lecture. Tu pourras ensuite la déplacer, la couper et la régler.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="segmented" id="vSrc"><button data-src="free" aria-pressed="true">${ic('text')}Depuis un texte (gratuit)</button><button data-src="rec" aria-pressed="false">${ic('mic')}Enregistrer</button><button data-src="file" aria-pressed="false">${ic('upload')}Importer</button></div>
+    <div style="display:grid;gap:12px">
+      <label class="field"><span>Texte à dire</span><textarea id="vText" rows="4" placeholder="Bonjour ! Découvrez aujourd’hui…"></textarea></label>
+      <div class="grid-2"><label class="field"><span>Voix</span><select id="vVoice">${FREE_VOICES.map((fv) => `<option value="${fv.key}">${esc(fv.label)}</option>`).join('')}</select></label>
+        <label class="field"><span>Vitesse</span><select id="vSpeed">${[0.85, 0.95, 1, 1.1, 1.2].map((x) => `<option value="${x}" ${x === 1 ? 'selected' : ''}>×${String(x).replace('.', ',')}</option>`).join('')}</select></label></div>
+      <label class="switch"><input type="checkbox" id="vSubs" checked>Créer les sous-titres synchronisés (éléments globaux, modifiables)</label>
+      <p class="hint" id="vStatus">Calculée sur ton ordinateur, gratuite et illimitée. Le premier usage télécharge la voix une fois.</p>
+    </div>
+    <p class="form-error" id="vErr"></p>
+    <div class="dlg-foot"><button class="btn" data-close>Annuler</button><button class="btn primary" id="vGo">${ic('play')}Générer et ajouter</button></div></div>`, {
+    size: 'mid',
+    onMount: (m) => {
+      const go = $('#vGo', m);
+      $('#vSrc', m).addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-src]'); if (!b || busy || b.dataset.src === 'free') return;
+        if (b.dataset.src === 'rec') { closeModal(); const wav = await recordDialog(''); if (wav) await addVoiceClip(wav, 'Voix enregistrée', at); }
+        else { const f = await pickAudioFile(); if (!f) return; closeModal(); try { toast('Préparation de l’audio…'); await addVoiceClip(await toWav(f), f.name.replace(/\.[a-z0-9]+$/i, ''), at); } catch { toast('Fichier audio illisible.', 'error'); } }
+      });
+      go.addEventListener('click', async () => {
+        const text = $('#vText', m).value.trim(); if (!text) { $('#vErr', m).textContent = 'Écris le texte à faire dire.'; return; }
+        busy = true; go.disabled = true; go.innerHTML = '<span class="spinner"></span>Génération…';
+        const key = $('#vVoice', m).value, subs = $('#vSubs', m).checked;
+        try {
+          const blob = await freeTts(text, key, +$('#vSpeed', m).value, (p) => { const st = $('#vStatus'); if (st) st.textContent = p.phase === 'download' ? `Téléchargement de la voix, ${Math.round(p.ratio * 100)} % (une seule fois)…` : 'Synthèse de la voix…'; });
+          const fv = FREE_VOICES.find((x) => x.key === key);
+          closeModal();
+          await addVoiceClip(await toWav(blob), `Voix ${fv?.label.split(',')[0] || ''}`.trim(), at, subs ? text : '');
+        } catch (err) { console.error(err); busy = false; go.disabled = false; go.innerHTML = `${ic('play')}Générer et ajouter`; $('#vErr', m).textContent = 'La voix n’a pas pu être générée. Vérifie ta connexion au premier usage.'; }
+      });
+    },
+  });
+}
+async function addVoiceClip(wav, name, at, subtitleText = '') {
+  try {
+    const media = await uploadMedia(wav, 'audio', name);
+    const ac = new AudioContext(); const buf = await ac.decodeAudioData(await wav.arrayBuffer()); ac.close();
+    if (!ed) return;
+    beforeChange();
+    const total = V.timeline(projForRender()).total;
+    const c = { id: uid(), kind: 'voice', media, name, at: Math.min(at, Math.max(0, total - 0.5)), dur: Math.round(buf.duration * 1000) / 1000, offset: 0, volume: 1, fadeIn: 0.01, fadeOut: 0.05 };
+    if (subtitleText) c.text = subtitleText;
+    (P().data.audio ||= []).push(c);
+    ed.audioSel = { kind: 'aclip', id: c.id };
+    if (!ed.showAudio) { ed.showAudio = true; $('#atl').hidden = false; $('#audioBtn')?.classList.add('on'); fitCanvas(); }
+    await reloadAssets();
+    if (subtitleText) {
+      const env = ed.assets.clipEnv?.[media];
+      const sentences = subtitleText.match(/[^.!?…]+[.!?…]*/g)?.map((x) => x.trim()).filter(Boolean) || [subtitleText];
+      const times = env ? V.estimateTimes(env, sentences.map((x) => x.length + 4)) : sentences.map((_, i) => (i * buf.duration) / sentences.length);
+      sentences.forEach((txt, i) => {
+        const st = c.at + times[i], en = i < sentences.length - 1 ? c.at + times[i + 1] - 0.05 : c.at + c.dur + 0.2;
+        (P().data.globals ||= []).push(V.newElement('text', { text: txt, font: 'texte', weight: 700, size: 46, w: 0.8, y: 0.88, bg: '#111111', color: 'auto', start: Math.round(st * 100) / 100, end: Math.round(en * 100) / 100, anim: { ...V.newElement('text').anim, in: 'fade', inDur: 0.2, out: 'fade', outDur: 0.15 } }));
+      });
+    }
+    if (c.at + c.dur > total) toast('La voix dépasse la fin de la vidéo : allonge la dernière scène pour l’entendre en entier.');
+    changed({ inspector: true }); renderAudio();
+    toast(subtitleText ? 'Voix off ajoutée avec ses sous-titres' : 'Voix off ajoutée', 'ok');
+  } catch (e) { console.error(e); toast(e.message || 'Ajout de la voix impossible.', 'error'); }
+}
+
+/* =========================================================
    Timeline audio : voix, musique, bruitages, son des clips
+
    ========================================================= */
 const peaksCache = new WeakMap();
 function peaksOf(buf, n = 600) {
@@ -1383,6 +1581,7 @@ function audioItems() {
     if (el.type === 'video') { const st = offset + (+el.start || 0), en = offset + (el.end == null ? d : Math.min(d, el.end)); out.clips.push({ id: el.id, global, idx: item?.index, at: st, dur: en - st, el }); }
   }
   if (proj.music) { const ms = V.musicSettings(proj, total); out.music = { ...ms, name: musicLabel() }; }
+  out.aclips = V.audioClipsOf(proj).map((c) => ({ ...c, at: +c.at || 0, dur: +c.dur || 0, buf: ed.assets.audioClips?.[c.media || `track:${c.track}`] }));
   return out;
 }
 function renderAudio() {
@@ -1400,14 +1599,22 @@ function renderAudio() {
       <div class="atl-scroll" id="atlScroll"><div class="atl-inner" id="atlInner" style="width:${z * 100}%">
         <div class="atl-ruler" data-atl-ruler>${ticks.map((t) => `<i style="left:${pc(t)}">${Math.round(t)} s</i>`).join('')}</div>
         <div class="atl-lane scenes">${A.scenes.map((it) => `<div class="atl-scene ${it.index === ed.sel ? 'on' : ''}" data-atl-scene="${it.index}" style="left:${pc(it.start)};width:${pc(it.end - it.start)}">${it.index + 1}. ${esc(SCENES[it.scene.type]?.label || '')}</div>`).join('')}</div>
-        <div class="atl-lane">${A.voices.map((v) => `<div class="atl-blk voice ${isSel('voice', v.id) ? 'sel' : ''}" data-atl-kind="voice" data-atl-id="${v.id}" style="left:${pc(v.at)};width:${pc(v.dur)}"><canvas data-wave="voice" data-id="${v.id}"></canvas><span>Voix ${v.idx + 1}${v.vol !== 1 ? `, ${Math.round(v.vol * 100)} %` : ''}</span></div>`).join('') || '<span class="atl-empty">Pas de voix. Ajoute-en une dans une scène Présentateur.</span>'}</div>
-        <div class="atl-lane">${A.music ? `<div class="atl-blk music ${isSel('music') ? 'sel' : ''}" data-atl-kind="music" style="left:${pc(A.music.at)};width:${pc(A.music.end - A.music.at)}"><span class="g l" data-atl-grip="l"></span><canvas data-wave="music"></canvas><span>${esc(A.music.name)}, ${Math.round(A.music.volume * 100)} %</span><i class="fade in" style="width:${pc(A.music.fadeIn * T / (A.music.end - A.music.at))}"></i><i class="fade out" style="width:${pc(A.music.fadeOut * T / (A.music.end - A.music.at))}"></i><span class="g r" data-atl-grip="r"></span></div>`
-          : '<button class="atl-empty atl-add" data-ed="music">+ Ajouter une musique</button>'}</div>
+        <div class="atl-lane">${A.voices.map((v) => `<div class="atl-blk voice ${isSel('voice', v.id) ? 'sel' : ''}" data-atl-kind="voice" data-atl-id="${v.id}" style="left:${pc(v.at)};width:${pc(v.dur)}"><canvas data-wave="voice" data-id="${v.id}"></canvas><span>Présentateur ${v.idx + 1}${v.vol !== 1 ? `, ${Math.round(v.vol * 100)} %` : ''}</span></div>`).join('')}
+          ${A.aclips.filter((c) => c.kind === 'voice').map((c) => aclipBlock(c, pc, isSel)).join('')}
+          ${A.voices.length || A.aclips.some((c) => c.kind === 'voice') ? '' : '<span class="atl-empty">Pas encore de voix.</span>'}
+          <button class="atl-plus" data-atl="addVoice" title="Ajouter une voix off à la tête de lecture">${ic('plus')}Voix</button></div>
+        <div class="atl-lane">${A.aclips.filter((c) => c.kind === 'music').map((c) => aclipBlock(c, pc, isSel)).join('')}${A.music ? `<div class="atl-blk music ${isSel('music') ? 'sel' : ''}" data-atl-kind="music" style="left:${pc(A.music.at)};width:${pc(A.music.end - A.music.at)}"><span class="g l" data-atl-grip="l"></span><canvas data-wave="music"></canvas><span>${esc(A.music.name)}, ${Math.round(A.music.volume * 100)} %</span><i class="fade in" style="width:${pc(A.music.fadeIn * T / (A.music.end - A.music.at))}"></i><i class="fade out" style="width:${pc(A.music.fadeOut * T / (A.music.end - A.music.at))}"></i><span class="g r" data-atl-grip="r"></span></div>`
+          : A.aclips.some((c) => c.kind === 'music') ? '' : '<button class="atl-empty atl-add" data-ed="music">+ Ajouter une musique</button>'}</div>
         <div class="atl-lane">${A.sfx.map((x) => `<div class="atl-sfx ${isSel('sfx', x.id) ? 'sel' : ''}" data-atl-kind="sfx" data-atl-id="${x.id}" style="left:${pc(x.at)}" title="${esc(x.name)}"><b></b><span>${esc(x.name)}</span></div>`).join('') || '<span class="atl-empty">Pas de bruitage. Onglet Vidéo : « Ajouter les bruitages automatiquement ».</span>'}</div>
         <div class="atl-lane">${A.clips.map((c) => `<div class="atl-blk clip ${c.el.muted ? 'muted' : ''} ${isSel('clip', c.id) ? 'sel' : ''}" data-atl-kind="clip" data-atl-id="${c.id}" style="left:${pc(c.at)};width:${pc(c.dur)}"><span>${c.el.muted ? 'Son coupé' : `Son du clip, ${Math.round((c.el.volume ?? 1) * 100)} %`}</span></div>`).join('') || '<span class="atl-empty">Pas de clip vidéo.</span>'}</div>
         <b class="atl-ph" id="atlPh"></b>
       </div></div></div>
     <div class="atl-props" id="atlProps">${audioProps(A)}</div>`;
+  $$('#atl canvas[data-wave="aclip"]').forEach((c) => {
+    const a = A.aclips.find((x) => x.id === c.dataset.id); if (!a?.buf) return;
+    const pk = peaksOf(a.buf, 1200), from = Math.floor((a.offset / a.buf.duration) * pk.length), to = Math.ceil(((a.offset + a.dur) / a.buf.duration) * pk.length);
+    drawWave(c, pk.subarray(Math.max(0, from), Math.min(pk.length, Math.max(from + 1, to))), 'rgba(255,255,255,.6)');
+  });
   $$('#atl canvas[data-wave]').forEach((c) => {
     if (c.dataset.wave === 'music' && ed.assets.music?.buffer) drawWave(c, peaksOf(ed.assets.music.buffer), 'rgba(255,255,255,.55)');
     if (c.dataset.wave === 'voice') { const v = A.voices.find((x) => x.id === c.dataset.id); if (v?.vo) drawWave(c, v.vo.env, 'rgba(255,255,255,.6)'); }
@@ -1415,8 +1622,23 @@ function renderAudio() {
   const sc = $('#atlScroll'); if (sc && ed.audioScroll) sc.scrollLeft = ed.audioScroll;
   updateAudioPlayhead();
 }
+function aclipBlock(c, pc, isSel) {
+  const fi = ((c.fadeIn || 0) / Math.max(0.01, c.dur)) * 100, fo = ((c.fadeOut || 0) / Math.max(0.01, c.dur)) * 100;
+  return `<div class="atl-blk ${c.kind === 'music' ? 'music' : 'voice free'} ${isSel('aclip', c.id) ? 'sel' : ''}" data-atl-kind="aclip" data-atl-id="${c.id}" style="left:${pc(c.at)};width:${pc(c.dur)}">
+    <span class="g l" data-atl-grip="l"></span><canvas data-wave="aclip" data-id="${c.id}"></canvas><span>${esc(c.name || (c.kind === 'music' ? 'Musique' : 'Voix'))}${(c.volume ?? 1) !== 1 ? `, ${Math.round(c.volume * 100)} %` : ''}</span>
+    ${fi > 2 ? `<i class="fade in" style="width:${fi}%"></i>` : ''}${fo > 2 ? `<i class="fade out" style="width:${fo}%"></i>` : ''}<span class="g r" data-atl-grip="r"></span></div>`;
+}
 function audioProps(A) {
-  const s = ed.audioSel; if (!s) return '<span class="hint">Sélectionne un bloc pour régler son volume, ses fondus ou son décalage.</span>';
+  const s = ed.audioSel; if (!s) return '<span class="hint">Clique un bloc pour le régler, clic droit pour le couper, le dupliquer ou le supprimer. Ctrl+B coupe à la tête de lecture.</span>';
+  if (s.kind === 'aclip') {
+    const c = A.aclips.find((x) => x.id === s.id); if (!c) return '';
+    const R = (k, label, v, min, max, step, fmt) => `<label class="atl-f"><span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-atlk="${k}"><output data-atlo="${k}">${fmt(v)}</output></label>`;
+    const p2 = (v) => `${Math.round(v * 100)} %`, s2 = (v) => `${(+v).toFixed(2).replace('.', ',')} s`;
+    return `<b>${esc(c.name || '')}</b>${R('aVol', 'Volume', c.volume ?? 1, 0, 1.5, 0.05, p2)}${R('aFadeIn', 'Fondu d’entrée', c.fadeIn || 0, 0, Math.max(0.05, Math.min(5, c.dur / 2)), 0.05, s2)}${R('aFadeOut', 'Fondu de sortie', c.fadeOut || 0, 0, Math.max(0.05, Math.min(6, c.dur / 2)), 0.05, s2)}
+      ${c.kind === 'music' ? `<label class="switch"><input type="checkbox" data-atlk="aDuck" ${c.duck !== false ? 'checked' : ''}>Baisser pendant les voix</label>` : ''}
+      <button class="btn ghost" data-atl="cut">${ic('scissors')}Couper à la tête de lecture</button><button class="btn ghost danger" data-atl="aDel">${ic('trash')}Supprimer</button>`;
+  }
+
   const R = (k, label, v, min, max, step, fmt) => `<label class="atl-f"><span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-atlk="${k}"><output data-atlo="${k}">${fmt(v)}</output></label>`;
   const pct2 = (v) => `${Math.round(v * 100)} %`, s2 = (v) => `${(+v).toFixed(2).replace('.', ',')} s`;
   if (s.kind === 'voice') {
@@ -1448,6 +1670,7 @@ function audioProps(A) {
 function audioTarget() {
   const s = ed.audioSel; if (!s) return null;
   if (s.kind === 'voice') return scenesOf().find((x) => x.id === s.id);
+  if (s.kind === 'aclip') return (P().data.audio || []).find((x) => x.id === s.id);
   if (s.kind === 'sfx' || s.kind === 'clip') return V.allElements(projForRender()).find((x) => x.el.id === s.id)?.el;
   return P().data.music;
 }
@@ -1470,6 +1693,9 @@ function bindAudio() {
       if (ed.audioSel.kind === 'sfx' && t?.anim?.sfx) renderSfx(t.anim.sfx).then((buf) => playBuffer(buf, t.anim.sfxVol ?? 0.7));
       if (ed.audioSel.kind === 'voice') { const v = A.voices.find((x) => x.id === ed.audioSel.id); if (v) { setPlaying(false); seek(v.at - 0.2); setPlaying(true); } }
     }
+    if (k === 'addVoice') { addVoiceDialog(); return; }
+    if (k === 'cut' && ed.audioSel) { splitAudioAt(ed.audioSel.kind === 'voice' ? 'presenter' : ed.audioSel.kind, ed.audioSel.id, ed.time); return; }
+    if (k === 'aDel' && ed.audioSel) { deleteAudioItem('aclip', ed.audioSel.id); return; }
     if (k === 'sfxDel' && t) { beforeChange(); t.anim.sfx = ''; ed.audioSel = null; changed({ film: true, inspector: true }); }
     if (k === 'fitScene' && t) { const v = A.voices.find((x) => x.id === t.id); if (v) { beforeChange(); t.duration = clamp(Math.ceil((v.at - v.sceneStart + v.dur + 0.8) * 2) / 2, 2, 60); changed({ film: true, inspector: true, scrub: true }); } }
   });
@@ -1482,12 +1708,13 @@ function bindAudio() {
     ed.audioSel = { kind: blk.dataset.atlKind, id: blk.dataset.atlId || '' };
     const t = audioTarget(); if (!t) return;
     renderAudio();
+    if (e.button === 2) return;
     if (ed.audioSel.kind === 'clip') return;
     beforeChange();
     const A = audioItems(), grip = e.target.dataset.atlGrip || 'move';
     drag = { kind: ed.audioSel.kind, id: ed.audioSel.id, grip, x0: e.clientX, spp: secPerPx(), t, A,
       v0: ed.audioSel.kind === 'voice' ? V.voiceDelayOf(t) : ed.audioSel.kind === 'sfx' ? (+t.anim.sfxOffset || 0) : null,
-      m0: A.music ? { ...A.music } : null };
+      m0: A.music ? { ...A.music } : null, c0: ed.audioSel.kind === 'aclip' ? { ...t } : null };
     box.setPointerCapture(e.pointerId); e.preventDefault();
   });
   box.addEventListener('pointermove', (e) => {
@@ -1498,6 +1725,13 @@ function bindAudio() {
       drag.t.props.voiceDelay = clamp(snap(drag.v0 + dt), 0, Math.max(0, maxD));
     } else if (drag.kind === 'sfx') {
       drag.t.anim.sfxOffset = clamp(snap(drag.v0 + dt), -1.5, 2);
+    } else if (drag.kind === 'aclip') {
+      const c = drag.t, c0 = drag.c0, T = drag.A.total, ph = ed.time;
+      const sn = (v) => (Math.abs(v - ph) < 0.12 ? ph : snap(v));
+      const buf = ed.assets.audioClips?.[c.media || `track:${c.track}`], srcLen = buf ? buf.duration : 1e9;
+      if (drag.grip === 'l') { const nAt = clamp(sn(c0.at + dt), Math.max(0, c0.at - c0.offset), c0.at + c0.dur - 0.1); c.offset = Math.round((c0.offset + (nAt - c0.at)) * 1000) / 1000; c.dur = Math.round((c0.dur - (nAt - c0.at)) * 1000) / 1000; c.at = Math.round(nAt * 1000) / 1000; }
+      else if (drag.grip === 'r') { const nEnd = clamp(sn(c0.at + c0.dur + dt), c0.at + 0.1, Math.min(T + 30, c0.at + (srcLen - c0.offset))); c.dur = Math.round((nEnd - c0.at) * 1000) / 1000; }
+      else c.at = Math.round(clamp(sn(c0.at + dt), 0, Math.max(0, T - 0.1)) * 1000) / 1000;
     } else if (drag.kind === 'music') {
       const m = P().data.music, T = drag.A.total, m0 = drag.m0;
       if (drag.grip === 'l') m.at = clamp(snap(m0.at + dt), 0, m0.end - 0.5);
@@ -1529,6 +1763,10 @@ function bindAudio() {
       case 'sfxOffset': t.anim.sfxOffset = v; break;
       case 'clipVol': t.volume = v; break;
       case 'clipMute': t.muted = v; break;
+      case 'aVol': t.volume = v; break;
+      case 'aFadeIn': t.fadeIn = v; break;
+      case 'aFadeOut': t.fadeOut = v; break;
+      case 'aDuck': t.duck = v; break;
       default: break;
     }
     const o = $(`[data-atlo="${k}"]`);
@@ -1538,6 +1776,15 @@ function bindAudio() {
     if (el.type !== 'range') renderAudio(); else clearTimeout(ed.atlT), (ed.atlT = setTimeout(renderAudio, 350));
   });
   box.addEventListener('scroll', (e) => { if (e.target.id === 'atlScroll') ed.audioScroll = e.target.scrollLeft; }, true);
+  box.addEventListener('contextmenu', (e) => {
+    const blk = e.target.closest('[data-atl-kind]'); if (!blk) return;
+    e.preventDefault();
+    const r = $('#atlInner').getBoundingClientRect(), T = V.timeline(projForRender()).total || 1;
+    let t = clamp((e.clientX - r.left) / r.width, 0, 1) * T;
+    if (Math.abs(t - ed.time) < 0.15) t = ed.time;
+    ed.audioSel = { kind: blk.dataset.atlKind, id: blk.dataset.atlId || '' }; renderAudio();
+    audioMenu(e, blk.dataset.atlKind, blk.dataset.atlId || '', t);
+  });
 }
 
 /* =========================================================
@@ -1877,6 +2124,8 @@ function setPath(o, path, v) { const ks = path.split('.'); let x = o; for (let i
 /* ---------- Musique de la vidéo ---------- */
 function musicLabel() {
   const m = ed?.project?.data?.music;
+  const parts = (ed?.project?.data?.audio || []).filter((c) => c.kind === 'music').length;
+  if (!m && parts) return `Musique en ${plural(parts, 'morceau', 'morceaux')}`;
   if (!m) return 'Ajouter une musique';
   return m.kind === 'library' ? (MUSIC_TRACKS[m.track]?.name || 'Musique') : (m.name || 'Ma musique');
 }
@@ -1898,6 +2147,7 @@ function musicDialog() {
   const cur = P().data.music;
   const pick = async (music) => {
     stopListen(); beforeChange();
+    if (P().data.audio?.some((c) => c.kind === 'music')) P().data.audio = P().data.audio.filter((c) => c.kind !== 'music');
     if (music) P().data.music = { volume: cur?.volume ?? 0.6, duck: cur?.duck ?? true, ...music };
     else delete P().data.music;
     closeModal();
@@ -2044,6 +2294,7 @@ function changed({ film = false, clip = null, inspector = false, scrub = false }
   ed.dirty = true;
   if (ed.showTracks) setTimeout(renderTracks, 0);
   if (ed.showAudio) setTimeout(renderAudio, 0);
+  if (ed.playing) { clearTimeout(ed.clipRestart); ed.clipRestart = setTimeout(() => { if (ed?.playing) startClipAudio(ed.time); }, 120); }
   if (film) renderFilm(); else if (clip !== null) redrawClip(clip);
   if (inspector) renderInspector();
   if (scrub) renderScrub();
@@ -2388,6 +2639,13 @@ function onEdKey(e) {
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); ed.save.flush(); return; }
   if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); exportDialog(); return; }
+  if (mod && e.key.toLowerCase() === 'b') {
+    e.preventDefault();
+    if (ed.audioSel && ed.showAudio) splitAudioAt(ed.audioSel.kind === 'voice' ? 'presenter' : ed.audioSel.kind, ed.audioSel.id, ed.time);
+    else if (ed.selEl && selElement()?.type === 'video') splitAudioAt('clip', ed.selEl.id, ed.time);
+    else toast('Sélectionne un morceau dans la timeline audio, ou un clip vidéo, pour le couper.');
+    return;
+  }
   if (typing) return;
   if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); (ed.selEl ? $('[data-ed="elDup"]') : $('[data-ed="dupScene"]'))?.click(); return; }
   if (ed.selEl && selElement()) {

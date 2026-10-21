@@ -12,6 +12,16 @@ export const VOICE_DELAY = 0.5;
 /** Décalage de la voix dans sa scène (réglable dans la timeline audio). */
 export const voiceDelayOf = (scene) => { const v = scene?.props?.voiceDelay; return v == null ? VOICE_DELAY : Math.max(0, +v); };
 /** Réglages effectifs de la musique : position dans la vidéo, fin, fondus, volume. */
+/* Clips audio libres (voix off, morceaux de musique découpés) */
+let NARR = [];
+function narrTalk(T) {
+  for (const n of NARR) {
+    const lt = T - n.at;
+    if (lt >= 0 && lt < n.dur) return envAt(n.env, lt + n.offset);
+  }
+  return null;
+}
+export const audioClipsOf = (project) => (project.audio || []).filter((c) => c && (c.media || c.track) && !c.hidden);
 export function musicSettings(project, total) {
   const m = project.music || {};
   const at = clamp(+m.at || 0, 0, Math.max(0, total - 0.5));
@@ -997,8 +1007,9 @@ export const SCENES = {
       const lt = t - vd;
       const vdur = voice ? voice.duration : Math.max(1, d - vd - 0.6);
       const speaking = lt >= 0 && lt <= vdur;
-      const talk = voice ? envAt(voice, lt) : (p.script && speaking ? synthTalk(lt) : 0);
-      const act = voice ? (envAt(voice, lt - 0.4) + envAt(voice, lt) + envAt(voice, lt + 0.4)) / 3 : (speaking && p.script ? 0.55 : 0);
+      const nt = voice ? null : narrTalk(S.T);
+      const talk = voice ? envAt(voice, lt) : nt != null ? nt : (p.script && speaking ? synthTalk(lt) : 0);
+      const act = voice ? (envAt(voice, lt - 0.4) + envAt(voice, lt) + envAt(voice, lt + 0.4)) / 3 : nt != null ? ((narrTalk(S.T - 0.4) || 0) + nt + (narrTalk(S.T + 0.4) || 0)) / 3 : (speaking && p.script ? 0.55 : 0);
       const gesture = speaking ? clamp(Math.sin(lt * 0.8 + 0.6) * 1.7 - 0.4) * clamp(act * 2) : 0;
       const left = p.side !== 'droite';
       const layout = p.layout || 'cote';
@@ -1704,6 +1715,7 @@ function drawOneElement(S, el, lt, d, hits) {
     const sp = S.sceneVoice;
     let talk = 0, act = 0;
     if (el.talk === 'voice' && sp) { const vl = lt - (S.voiceDelay ?? VOICE_DELAY); talk = envAt(sp, vl); act = (envAt(sp, vl - 0.4) + talk + envAt(sp, vl + 0.4)) / 3; }
+    else if (el.talk === 'voice' && narrTalk(S.T) != null) { talk = narrTalk(S.T); act = ((narrTalk(S.T - 0.4) || 0) + talk + (narrTalk(S.T + 0.4) || 0)) / 3; }
     else if (el.talk === 'mime' || (el.talk === 'voice' && !sp)) { const on = el.talk === 'mime'; talk = on ? synthTalk(lt) : 0; act = on ? 0.55 : 0; }
     const g = el.gesture || 'auto';
     const gesture = g === 'idle' ? 0 : g === 'wave' ? 0.75 + 0.25 * Math.sin(lt * 7) : g === 'pointLeft' || g === 'pointRight' ? 1 : clamp(Math.sin(lt * 0.8 + 0.6) * 1.7 - 0.4) * clamp(act * 2);
@@ -1762,6 +1774,8 @@ function bufFor(ctx, W, H) {
 /** Dessine l'image du projet au temps `time` (en secondes). */
 export function renderFrame(ctx, W, H, project, brand, assets, time, opts = {}) {
   const hits = opts.hits || null;
+  NARR = [];
+  if (assets?.clipEnv) for (const c of audioClipsOf(project)) { if (c.kind === 'voice' && c.media && assets.clipEnv[c.media]) NARR.push({ at: +c.at || 0, dur: +c.dur || 0, offset: +c.offset || 0, env: assets.clipEnv[c.media] }); }
   const B = normBrand(brand);
   const { items, total } = timeline(project);
   if (!items.length) { ctx.fillStyle = B.colors.dark; ctx.fillRect(0, 0, W, H); return; }
@@ -1935,6 +1949,18 @@ export async function prepareAssets(project, brand, opts = {}) {
     }
     await Promise.all(tasks);
   }
+  res.audioClips = {}; res.clipEnv = {};
+  {
+    const total = timeline(project).total, tasks = [];
+    for (const c of audioClipsOf(project)) {
+      if (c.media && opts.media) tasks.push(cachedMedia(`aclip:${c.media}`, async () => decodeAudio(await (await opts.media(c.media)).arrayBuffer())).then((b) => {
+        if (!b) return; res.audioClips[c.media] = b;
+        if (c.kind === 'voice') res.clipEnv[c.media] = { ...envelope(b), duration: b.duration };
+      }));
+      else if (c.track && MUSIC_TRACKS[c.track]) tasks.push(renderTrack(c.track, Math.max(total, (+c.offset || 0) + (+c.dur || 0)) + 2).then((b) => { res.audioClips[`track:${c.track}`] = b; }));
+    }
+    await Promise.all(tasks);
+  }
   const mus = project.music;
   if (mus && (mus.track || mus.media)) {
     let buf = null, key = '';
@@ -2076,7 +2102,7 @@ async function pickAudioConfig(sampleRate) {
   return null;
 }
 /** Mixe la musique et les voix ; la musique baisse automatiquement quand quelqu'un parle. */
-async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, volume = 0.8, voices, total, sfx = [], clips = [], at = 0, end = null, fadeIn = 0.6, fadeOut = 1.8 }) {
+async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, volume = 0.8, voices, total, sfx = [], clips = [], at = 0, end = null, fadeIn = 0.6, fadeOut = 1.8, aclips = [] }) {
   end = end == null ? total : Math.min(end, total);
   const sr = 48000;
   const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr);
@@ -2095,6 +2121,24 @@ async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, vo
     src.connect(g); g.connect(off.destination); src.start(at, Math.min(offset, Math.max(0, decoded.duration - 0.1))); src.stop(end + 0.05);
   }
   for (const v of vs) { const src = off.createBufferSource(); src.buffer = v.buffer; const g = off.createGain(); g.gain.value = clamp(v.vol ?? 1, 0, 1.5); src.connect(g); g.connect(off.destination); src.start(Math.max(0, v.at)); }
+  const voiceSpans = [...vs.map((v) => [v.at, v.end]), ...aclips.filter((c) => c.kind === 'voice').map((c) => [c.at, c.at + c.dur])].sort((a, b) => a[0] - b[0]);
+  for (const c of aclips) {
+    if (!c.buffer || c.at >= total) continue;
+    const st = Math.max(0, c.at), dur = Math.min(c.dur, total - st, c.buffer.duration - c.offset);
+    if (dur <= 0.02) continue;
+    const src = off.createBufferSource(); src.buffer = c.buffer;
+    const g = off.createGain(), vol = clamp(c.volume ?? 1, 0, 1.5);
+    const fi = Math.min(Math.max(0.005, c.fadeIn || 0.005), dur / 2), fo = Math.min(Math.max(0.005, c.fadeOut || 0.005), dur / 2);
+    let level = 0, last = 0;
+    const hold = (t) => { t = Math.max(t, last); g.gain.setValueAtTime(level, t); last = t; };
+    const ramp = (t, v) => { t = Math.max(t, last + 0.004); g.gain.linearRampToValueAtTime(v, t); last = t; level = v; };
+    g.gain.setValueAtTime(0, st); last = st; ramp(st + fi, vol);
+    if (c.kind === 'music' && c.duck !== false) {
+      for (const [a, b] of voiceSpans) { if (b < st || a > st + dur) continue; hold(a - 0.3); ramp(Math.max(a, last + 0.01), vol * 0.25); hold(b); ramp(b + 0.4, vol); }
+    }
+    hold(st + dur - fo); ramp(st + dur, 0);
+    src.connect(g); g.connect(off.destination); src.start(st, Math.max(0, c.offset)); src.stop(st + dur + 0.02);
+  }
   for (const e of sfx) { if (!e.buffer || e.at >= total) continue; const src = off.createBufferSource(); src.buffer = e.buffer; const g = off.createGain(); g.gain.value = clamp(e.vol ?? 0.7); src.connect(g); g.connect(off.destination); src.start(Math.max(0, e.at)); }
   for (const c of clips) {
     if (!c.buffer || c.at >= total) continue;
@@ -2132,10 +2176,11 @@ export async function exportVideo(opts) {
       clips.push({ buffer: buf, at: offset + st, offset: +el.trimIn || 0, dur: Math.max(0.05, Math.min(dur, maxDur)), rate: +el.speed || 1, vol: clamp(+el.volume ?? 1) });
     }
   }
-  if (music || am || voices.length || sfxEv.length || clips.length) {
+  const aclips = audioClipsOf(project).map((c) => ({ ...c, at: +c.at || 0, dur: +c.dur || 0, offset: +c.offset || 0, buffer: assets?.audioClips?.[c.media || `track:${c.track}`] })).filter((c) => c.buffer);
+  if (music || am || voices.length || sfxEv.length || clips.length || aclips.length) {
     onProgress?.({ phase: 'prepare', progress: 0 });
     const ms = musicSettings(project, frames / fps);
-    audioBuf = await mixAudio(music ? { music, volume, voices, total: frames / fps, sfx: sfxEv, clips } : { musicBuffer: am?.buffer, offset: ms.offset, duck: ms.duck, volume: ms.volume, at: ms.at, end: ms.end, fadeIn: ms.fadeIn, fadeOut: ms.fadeOut, voices, total: frames / fps, sfx: sfxEv, clips });
+    audioBuf = await mixAudio(music ? { music, volume, voices, total: frames / fps, sfx: sfxEv, clips, aclips } : { musicBuffer: am?.buffer, offset: ms.offset, duck: ms.duck, volume: ms.volume, at: ms.at, end: ms.end, fadeIn: ms.fadeIn, fadeOut: ms.fadeOut, voices, total: frames / fps, sfx: sfxEv, clips, aclips });
     audio = await pickAudioConfig(audioBuf.sampleRate);
   }
   const target = new ArrayBufferTarget();

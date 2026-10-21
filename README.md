@@ -13,6 +13,8 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
 - **Vidéos importées** (MP4, MOV, WebM) : découpage, scission, vitesse, volume ou son coupé, cadrage et coins arrondis.
 - **Pistes de scène** : chaque élément est une barre déplaçable et redimensionnable (aimantation au dixième de seconde et à la tête de lecture), avec la forme d’onde de la voix.
 - **Timeline audio sur toute la vidéo** : pistes Voix, Musique, Bruitages et Clips, en face des scènes, avec formes d’onde, tête de lecture et zoom. On y fait glisser la voix dans sa scène, la musique (début, fin, poignées), les bruitages (avant ou après l’apparition de leur élément), et on règle volume, fondus d’entrée et de sortie, départ dans le morceau et baisse pendant les voix. Tout est respecté à l’export.
+- **Voix off libres**, sans présentateur : posées n’importe où sur la timeline, depuis un texte (voix gratuite, avec sous-titres synchronisés en option), au micro ou depuis un fichier. Les avatars à l’image parlent sur ces voix.
+- **Découpe fluide** : clic droit sur une voix, la musique ou un clip vidéo (couper à l’endroit cliqué, dupliquer, fondus, écouter d’ici, supprimer), ou **Ctrl+B** à la tête de lecture. Chaque coupe pose un micro-fondu pour éviter les clics audibles ; les bords des morceaux se tirent pour les raccourcir.
 - **Synchronisation texte et voix** (estimation à partir des pauses) : titres phrase par phrase, ou texte mot par mot calé sur la voix, ensuite ajustables à la main.
 - **Sound design** : 19 bruitages synthétisés, libres de droits (interface, mouvement, cinéma, technologie), attachés à l’apparition des éléments, avec suggestion automatique selon l’animation.
 - **Scène libre** : un fond vide à composer entièrement.
