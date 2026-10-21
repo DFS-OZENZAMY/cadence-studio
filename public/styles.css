@@ -459,3 +459,68 @@ dialog[open] { animation: pop .18s ease-out; }
 .music-chip:hover { border-color: #6A4FFF; }
 .music-chip .ic { width: 15px; height: 15px; color: #8B76FF; }
 .badge-free { font-size: 10.5px; font-weight: 800; padding: 2px 7px; border-radius: 5px; background: rgba(69, 208, 142, .15); color: #1E9E64; }
+
+/* ---------- Éditeur d'éléments ---------- */
+.ed-stage { position: relative; }
+.stage-tools { position: absolute; top: 12px; left: 14px; z-index: 3; display: flex; gap: 8px; }
+.stage-tools .btn { height: 34px; font-size: 13px; box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+.canvas-wrap { position: relative; touch-action: none; }
+.canvas-wrap canvas { position: absolute; inset: 0; }
+.sel-layer { position: absolute; inset: 0; pointer-events: none; }
+.canvas-wrap { cursor: default; }
+.sel-box { position: absolute; border: 2px solid #8B76FF; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .4); transform-origin: center; }
+.sel-box.locked { border-style: dashed; border-color: #F2B54A; }
+.sel-handle { position: absolute; right: -8px; bottom: -8px; width: 14px; height: 14px; border-radius: 4px; background: #fff; border: 2px solid #8B76FF; pointer-events: auto; cursor: nwse-resize; }
+.sel-tag { position: absolute; left: -2px; top: -24px; font: 700 11px/1 var(--body); color: #fff; background: #6A4FFF; padding: 4px 7px; border-radius: 5px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.guide { position: absolute; background: #FF6BB5; pointer-events: none; }
+.guide.v { left: 50%; top: 0; bottom: 0; width: 1px; }
+.guide.h { top: 50%; left: 0; right: 0; height: 1px; }
+.el-list { display: grid; gap: 4px; }
+.el-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border-radius: 9px; background: var(--stage-2); border: 1px solid transparent; cursor: pointer; }
+.el-row:hover { border-color: #3a3a46; }
+.el-row.on { border-color: #8B76FF; background: #1C1A2E; }
+.el-row .icon-btn { width: 28px; height: 28px; }
+.el-row .icon-btn .ic { width: 15px; height: 15px; }
+.el-ic { color: #8B76FF; display: grid; }
+.el-ic .ic { width: 16px; height: 16px; }
+.el-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.el-flag { color: var(--stage-muted); display: grid; }
+.el-flag .ic { width: 14px; height: 14px; }
+.badge-glob { font: 800 10.5px/1 var(--body); padding: 3px 6px; border-radius: 5px; background: #6A4FFF; color: #fff; }
+.insp-sub { font-size: 12px; font-weight: 800; color: #fff; margin-top: 4px; }
+.color-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.cchip { width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--stage-line); padding: 0; display: grid; place-items: center; color: var(--stage-muted); background: var(--stage-2); cursor: pointer; position: relative; overflow: hidden; }
+.cchip .ic { width: 14px; height: 14px; }
+.cchip.on { border-color: #fff; box-shadow: 0 0 0 2px #6A4FFF; }
+.cchip.custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.pos-grid { display: grid; grid-template-columns: repeat(3, 26px); gap: 4px; padding: 6px; border-radius: 10px; background: var(--stage-2); width: max-content; }
+.pos-grid button { width: 26px; height: 18px; border-radius: 4px; border: 1px solid var(--stage-line); background: #23232C; padding: 0; }
+.pos-grid button:hover { background: #6A4FFF; border-color: #6A4FFF; }
+.add-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+.add-tile { display: grid; justify-items: center; gap: 6px; padding: 12px 8px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 700; font-size: 12.5px; text-align: center; }
+.add-tile .ic { width: 22px; height: 22px; color: var(--accent); }
+.add-tile small { font-weight: 600; color: var(--muted); font-size: 10.5px; }
+.add-tile:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* Pistes */
+.tracks { border-top: 1px solid var(--stage-line); padding: 8px 16px 10px; max-height: 210px; overflow: auto; display: grid; gap: 4px; scrollbar-color: #33333f transparent; user-select: none; }
+.tr-head, .tr-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: center; }
+.tr-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--stage-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.tr-label .ic { width: 14px; height: 14px; flex: none; }
+.tr-row.on .tr-label { color: #fff; }
+.tr-ruler { position: relative; height: 20px; border-bottom: 1px solid var(--stage-line); cursor: pointer; }
+.tr-ruler i { position: absolute; top: 2px; font: 600 10.5px/1 ui-monospace, Consolas, monospace; color: var(--stage-muted); font-style: normal; transform: translateX(-50%); }
+.tr-ruler i:first-child { transform: none; }
+.tr-ph { position: absolute; top: 0; width: 2px; height: 600px; background: #FF6BB5; pointer-events: none; z-index: 2; }
+.tr-lane { position: relative; height: 28px; border-radius: 6px; background: #121218; }
+.tr-bar { position: absolute; top: 3px; bottom: 3px; border-radius: 6px; background: #3C3270; border: 1px solid #6A4FFF; display: flex; align-items: center; overflow: hidden; cursor: grab; min-width: 8px; }
+.tr-bar:active { cursor: grabbing; }
+.tr-bar.t-video { background: #1E4A55; border-color: #2FB5CF; }
+.tr-bar.t-image { background: #3D4A1E; border-color: #9BC94A; }
+.tr-bar.t-avatar { background: #4A2A3D; border-color: #E0559B; }
+.tr-bar.t-logo, .tr-bar.t-shape { background: #4A3A1E; border-color: #F2B54A; }
+.tr-bar.off { opacity: .4; }
+.tr-row.on .tr-bar { box-shadow: 0 0 0 2px #fff; }
+.tr-txt { flex: 1; padding: 0 8px; font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.tr-grip { width: 8px; align-self: stretch; cursor: ew-resize; background: rgba(255, 255, 255, .18); flex: none; }
+.tr-wave { position: absolute; top: 1px; height: 26px; }
+.tr-empty { color: var(--stage-muted); padding: 4px 0; }

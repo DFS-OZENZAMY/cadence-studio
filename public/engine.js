@@ -5,6 +5,7 @@
 import { Muxer, ArrayBufferTarget } from './vendor/mp4-muxer.mjs';
 import { drawCharacter, synthTalk, DEFAULT_CHAR } from './avatar.js';
 import { renderTrack, bufferToWav, TRACKS as MUSIC_TRACKS } from './music.js';
+import { renderSfx } from './sfx.js';
 export { MUSIC_TRACKS };
 export { DEFAULT_CHAR };
 export const VOICE_DELAY = 0.5;
@@ -97,6 +98,8 @@ export const E = {
   outExpo: (x) => (x >= 1 ? 1 : 1 - 2 ** (-10 * x)),
   inOutCubic: (x) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2),
   outBack: (x) => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2; },
+  inCubic: (x) => x * x * x,
+  spring: (x) => (x >= 1 ? 1 : 1 - Math.exp(-6.5 * x) * Math.cos(11 * x)),
 };
 function rng(seed) {
   let a = seed >>> 0;
@@ -688,6 +691,12 @@ export const SCENES = {
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(label), x, y + rad * 0.04); ctx.textBaseline = 'alphabetic';
       }
     },
+  },
+
+  libre: {
+    label: 'Scène libre', hint: 'Un fond vide : ajoute tes textes, images, vidéos et avatars', bg: 'sombre', duration: 5,
+    fields: [], defaults: {},
+    draw() {},
   },
 
   offre: {
@@ -1424,7 +1433,22 @@ export function normBrand(b) {
   return B;
 }
 
-function drawScene(ctx, W, H, item, localT, brand, assets, globalT, projText) {
+function makeS(ctx, W, H, item, localT, brand, assets, globalT, projText) {
+  const s = item.scene, def = SCENES[s.type] || SCENES.libre;
+  const mode = s.bg && s.bg !== 'auto' ? s.bg : def.bg;
+  const S = {
+    ctx, W, H, u: Math.min(W, H) / 1080, t: localT, d: +s.duration || 4, T: globalT,
+    p: s.props || {}, b: brand, F: null, assets,
+    portrait: H > W * 1.15, square: Math.abs(W - H) / Math.max(W, H) < 0.22,
+    pal: palette(brand, mode), seed: hashStr(s.id || item.index),
+  };
+  S.accent = S.pal.accent;
+  const RT = resolveText(brand, projText, s.text);
+  S.F = RT.F; TS = RT.ts; BS = RT.bs;
+  S.sceneVoice = s.props?.voice ? assets?.voices?.[s.props.voice] : null;
+  return S;
+}
+function drawScene(ctx, W, H, item, localT, brand, assets, globalT, projText, hits) {
   const s = item.scene, def = SCENES[s.type];
   if (!def) return;
   const mode = s.bg && s.bg !== 'auto' ? s.bg : def.bg;
@@ -1438,12 +1462,279 @@ function drawScene(ctx, W, H, item, localT, brand, assets, globalT, projText) {
   S.accent = S.pal.accent;
   const RT = resolveText(b, projText, s.text);
   S.F = RT.F; TS = RT.ts; BS = RT.bs;
+  S.sceneVoice = s.props?.voice ? assets?.voices?.[s.props.voice] : null;
   ctx.save();
   paintBackground(S);
   def.draw(S);
   ctx.restore();
   setTrack(ctx, 0);
+  if (s.elements?.length) { TS = 1; BS = 1; drawElements(S, s.elements, localT, S.d, hits); }
 }
+
+/* ---------------------------------------------------------------
+   Éléments libres : texte, logo, image, vidéo, forme, avatar
+   Chaque scène peut en contenir ; les éléments globaux s'affichent
+   sur toute la vidéo. Coordonnées normalisées (0..1), centre de l'élément.
+   --------------------------------------------------------------- */
+export const ELEMENT_TYPES = { text: 'Texte', logo: 'Logo', image: 'Image', video: 'Vidéo', shape: 'Forme ou icône', avatar: 'Avatar' };
+export const ANIM_IN = {
+  none: 'Aucune', fade: 'Fondu', slideUp: 'Monte', slideDown: 'Descend', slideLeft: 'Glisse depuis la gauche', slideRight: 'Glisse depuis la droite',
+  enterLeft: 'Entre par la gauche', enterRight: 'Entre par la droite', enterTop: 'Entre par le haut', enterBottom: 'Entre par le bas',
+  pop: 'Pop', scale: 'Zoom avant', blur: 'Flou vers net', typewriter: 'Machine à écrire', words: 'Mot par mot', letters: 'Lettre par lettre', mask: 'Masque balayé', highlight: 'Surlignage balayé',
+};
+export const TEXT_ONLY_ANIMS = ['typewriter', 'words', 'letters', 'mask', 'highlight'];
+export const ANIM_OUT = { none: 'Aucune', fade: 'Fondu', slideUp: 'Monte', slideDown: 'Descend', exitLeft: 'Sort par la gauche', exitRight: 'Sort par la droite', exitTop: 'Sort par le haut', exitBottom: 'Sort par le bas', scaleOut: 'Zoom arrière', blur: 'Net vers flou' };
+export const ANIM_EMPH = { none: 'Aucune', pulse: 'Pulsation', float: 'Flottement', wiggle: 'Balancement' };
+export const EASINGS = { outCubic: 'Doux', outExpo: 'Rapide', outBack: 'Rebond', spring: 'Ressort', inOutCubic: 'Progressif', lin: 'Linéaire' };
+export const SHAPES = { rect: 'Rectangle', circle: 'Cercle', line: 'Ligne', arrow: 'Flèche', star: 'Étoile', check: 'Coche', heart: 'Cœur', pin: 'Repère' };
+export const GESTURES = { auto: 'Selon la parole', idle: 'Au repos', wave: 'Salue', pointLeft: 'Montre à gauche', pointRight: 'Montre à droite' };
+
+let elCount = 0;
+export function newElement(type, extra = {}) {
+  const base = { id: `el_${Date.now().toString(36)}${(elCount++).toString(36)}${Math.random().toString(36).slice(2, 6)}`, type, x: 0.5, y: 0.5, w: 0.5, rot: 0, opacity: 1, start: 0, end: null, hidden: false, locked: false,
+    anim: { in: 'fade', inDur: 0.6, inDelay: 0, ease: 'outCubic', out: 'none', outDur: 0.4, emph: 'none', sfx: '', sfxVol: 0.7 } };
+  const by = {
+    text: { text: 'Votre texte', font: 'titre', size: 84, weight: 0, color: 'auto', align: 'center', spacing: 0, lineHeight: 1.12, upper: false, shadow: false, stroke: '', bg: '', w: 0.7, anim: { ...base.anim, in: 'slideUp' } },
+    logo: { w: 0.16, plate: false, x: 0.88, y: 0.12, anim: { ...base.anim, in: 'pop', ease: 'outBack' } },
+    image: { media: '', ar: 0.66, fit: 'cover', radius: 24, shadow: true, w: 0.4 },
+    video: { media: '', ar: 0.5625, fit: 'cover', radius: 0, shadow: false, w: 1, trimIn: 0, trimOut: null, speed: 1, volume: 1, muted: false, srcDur: 0 },
+    shape: { kind: 'rect', fill: 'accent', ar: 0.3, radius: 20, w: 0.3 },
+    avatar: { avatar: null, frame: 'none', gesture: 'auto', talk: 'voice', w: 0.32, x: 0.8, y: 0.62, anim: { ...base.anim, in: 'enterRight', inDur: 0.9, ease: 'outCubic' } },
+  }[type] || {};
+  return { ...base, ...by, ...extra, anim: { ...(by.anim || base.anim), ...(extra.anim || {}) } };
+}
+const elEnd = (el, d) => (el.end == null ? d : Math.min(d, el.end));
+const colorOf = (S, c) => (c === 'auto' || !c ? S.pal.fg : c === 'accent' ? S.pal.accent : c === 'primary' ? S.b.colors.primary : c === 'secondary' ? S.b.colors.secondary : c);
+
+function animState(S, el, lt, d, bw, bh, cx, cy) {
+  const A = el.anim || {}, W = S.W, H = S.H, u = S.u;
+  const start = +el.start || 0, end = elEnd(el, d);
+  const ease = E[A.ease] || E.outCubic;
+  const pr = A.in && A.in !== 'none' ? prog(lt, start + (+A.inDelay || 0), Math.max(0.05, +A.inDuration || +A.inDur || 0.6)) : 1;
+  const pin = ease(pr), po = A.out && A.out !== 'none' ? E.inOutCubic(prog(lt, end - (+A.outDur || 0.4), Math.max(0.05, +A.outDur || 0.4))) : 0;
+  const st = { alpha: el.opacity ?? 1, dx: 0, dy: 0, sc: 1, blur: 0, rev: 1, raw: pr };
+  const off = (axis, sign, k) => (axis === 'x' ? (sign < 0 ? cx + bw / 2 + 30 * u : W - cx + bw / 2 + 30 * u) : (sign < 0 ? cy + bh / 2 + 30 * u : H - cy + bh / 2 + 30 * u)) * k * sign;
+  switch (A.in) {
+    case 'fade': st.alpha *= pin; break;
+    case 'slideUp': st.dy += (1 - pin) * 70 * u; st.alpha *= Math.min(1, pr * 1.6); break;
+    case 'slideDown': st.dy -= (1 - pin) * 70 * u; st.alpha *= Math.min(1, pr * 1.6); break;
+    case 'slideLeft': st.dx -= (1 - pin) * 110 * u; st.alpha *= Math.min(1, pr * 1.6); break;
+    case 'slideRight': st.dx += (1 - pin) * 110 * u; st.alpha *= Math.min(1, pr * 1.6); break;
+    case 'enterLeft': st.dx += off('x', -1, 1 - pin); break;
+    case 'enterRight': st.dx += off('x', 1, 1 - pin); break;
+    case 'enterTop': st.dy += off('y', -1, 1 - pin); break;
+    case 'enterBottom': st.dy += off('y', 1, 1 - pin); break;
+    case 'pop': st.sc *= 0.35 + 0.65 * E.outBack(pr); st.alpha *= Math.min(1, pr * 3); break;
+    case 'scale': st.sc *= 0.7 + 0.3 * pin; st.alpha *= pin; break;
+    case 'blur': st.blur = (1 - pin) * 22 * u; st.alpha *= pin; break;
+    case 'typewriter': case 'words': case 'letters': case 'mask': case 'highlight': st.rev = el.type === 'text' ? pin : 1; if (el.type !== 'text') st.alpha *= pin; break;
+    default: break;
+  }
+  switch (A.out) {
+    case 'fade': st.alpha *= 1 - po; break;
+    case 'slideUp': st.dy -= po * 70 * u; st.alpha *= 1 - po; break;
+    case 'slideDown': st.dy += po * 70 * u; st.alpha *= 1 - po; break;
+    case 'exitLeft': st.dx += off('x', -1, E.inCubic(po)); break;
+    case 'exitRight': st.dx += off('x', 1, E.inCubic(po)); break;
+    case 'exitTop': st.dy += off('y', -1, E.inCubic(po)); break;
+    case 'exitBottom': st.dy += off('y', 1, E.inCubic(po)); break;
+    case 'scaleOut': st.sc *= 1 - 0.35 * po; st.alpha *= 1 - po; break;
+    case 'blur': st.blur += po * 22 * u; st.alpha *= 1 - po; break;
+    default: break;
+  }
+  if (A.emph === 'pulse') st.sc *= 1 + 0.035 * Math.sin((lt - start) * 4);
+  else if (A.emph === 'float') st.dy += Math.sin((lt - start) * 1.6) * 8 * u;
+  else if (A.emph === 'wiggle') st.rot = Math.sin((lt - start) * 3) * 0.035;
+  return st;
+}
+
+/** Texte : mise en page par mots, avec *mots en couleur d'accent*. */
+function textLayout(S, el) {
+  const { ctx, u, F } = S;
+  const fam = el.font === 'titre' || !el.font ? F.display : el.font === 'texte' ? F.body : el.font;
+  const lib = FONT_LIBRARY[fam];
+  const weight = el.weight || (el.font === 'texte' ? F.bw : el.font === 'titre' || !el.font ? F.dw : (lib?.dw || 700));
+  const size = Math.max(6, (+el.size || 72) * u);
+  setFont(ctx, fam, weight, size);
+  const track = (+el.spacing || 0) * size / 100; setTrack(ctx, track);
+  const raw = String(el.text || '');
+  const words = [];
+  raw.split('\n').forEach((para, pi) => {
+    para.split(/\s+/).filter(Boolean).forEach((w, i) => {
+      const acc = /^\*.+\*[.,!?;:]*$/.test(w);
+      let t = acc ? w.replace(/^\*/, '').replace(/\*([.,!?;:]*)$/, '$1') : w;
+      if (el.upper || (lib?.upper && el.font !== 'texte')) t = t.toUpperCase();
+      words.push({ t, acc, br: i === 0 && pi > 0 });
+    });
+  });
+  const maxW = Math.max(40, (el.w || 0.6) * S.W);
+  const space = ctx.measureText(' ').width;
+  const lines = []; let cur = [], cw = 0;
+  for (const wd of words) {
+    wd.w = ctx.measureText(wd.t).width;
+    if (cur.length && (wd.br || cw + space + wd.w > maxW)) { lines.push({ words: cur, w: cw }); cur = []; cw = 0; }
+    cw += (cur.length ? space : 0) + wd.w; cur.push(wd);
+  }
+  if (cur.length) lines.push({ words: cur, w: cw });
+  const lh = size * (+el.lineHeight || 1.12);
+  return { fam, weight, size, track, lines, lh, space, maxW, h: Math.max(lh, lines.length * lh), count: words.length, chars: words.reduce((a, w) => a + w.t.length, 0) };
+}
+function drawTextEl(S, el, L, st, lt, x0, y0) {
+  const { ctx, u } = S;
+  setFont(ctx, L.fam, L.weight, L.size); setTrack(ctx, L.track);
+  ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  const acc = S.pal.accent;
+  const bgCol = el.bg ? colorOf(S, el.bg) : null;
+  const color = (el.color === 'auto' || !el.color) && bgCol && bgCol.startsWith('#') ? onColor(bgCol) : colorOf(S, el.color);
+  const mode = (el.anim || {}).in;
+  const elT = lt - (+el.start || 0) - (+(el.anim || {}).inDelay || 0);
+  const wt = Array.isArray(el.wordTimes) && el.wordTimes.length ? el.wordTimes : null;
+  if (el.shadow) { ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 18 * u; ctx.shadowOffsetY = 6 * u; }
+  let wi = 0, ci = 0;
+  const nCh = Math.max(1, L.chars), nW = Math.max(1, L.count);
+  L.lines.forEach((line, li) => {
+    const lx = el.align === 'left' ? x0 : el.align === 'right' ? x0 + L.maxW - line.w : x0 + (L.maxW - line.w) / 2;
+    const base = y0 + li * L.lh + L.size * 0.86 + (L.lh - L.size * 1.12) / 2;
+    if (el.bg || mode === 'highlight') {
+      const bgc = el.bg ? colorOf(S, el.bg) : acc, padX = L.size * 0.18;
+      const k = mode === 'highlight' ? clamp(st.rev * L.lines.length - li) : 1;
+      if (k > 0) { ctx.save(); ctx.shadowColor = 'transparent'; ctx.fillStyle = bgc; rrect(ctx, lx - padX, base - L.size * 0.86, (line.w + padX * 2) * k, L.size * 1.12, L.size * 0.14); ctx.fill(); ctx.restore(); }
+    }
+    if (mode === 'mask') { ctx.save(); ctx.beginPath(); ctx.rect(lx - 10, base - L.size * 1.1, (line.w + 20) * clamp(st.rev * L.lines.length - li), L.size * 1.5); ctx.clip(); }
+    let x = lx;
+    for (const wd of line.words) {
+      let a = 1, dy = 0, txt = wd.t;
+      if (mode === 'words') {
+        const p = wt ? E.outCubic(prog(elT, wt[wi] ?? 0, 0.22)) : clamp(st.rev * nW - wi);
+        a = p; dy = (1 - p) * 0.3 * L.size;
+      } else if (mode === 'typewriter') {
+        const show = Math.floor(st.rev * nCh) - ci;
+        txt = show <= 0 ? '' : wd.t.slice(0, show);
+      }
+      const fill = wd.acc ? acc : color;
+      if (mode === 'letters') {
+        let cx2 = x;
+        for (const ch of wd.t) {
+          const p = clamp(st.rev * nCh * 1.15 - ci); ci++;
+          if (p > 0) { ctx.globalAlpha = st.alpha * p; if (el.stroke) { ctx.strokeStyle = el.stroke; ctx.lineWidth = 5 * u; ctx.strokeText(ch, cx2, base + (1 - p) * 0.25 * L.size); } ctx.fillStyle = fill; ctx.fillText(ch, cx2, base + (1 - p) * 0.25 * L.size); }
+          cx2 += ctx.measureText(ch).width;
+        }
+        ci--; 
+      } else if (txt && a > 0) {
+        ctx.globalAlpha = st.alpha * a;
+        if (el.stroke) { ctx.strokeStyle = el.stroke; ctx.lineWidth = 5 * u; ctx.lineJoin = 'round'; ctx.strokeText(txt, x, base + dy); }
+        ctx.fillStyle = fill; ctx.fillText(txt, x, base + dy);
+      }
+      if (mode !== 'letters') ci += wd.t.length; else ci++;
+      x += wd.w + L.space; wi++;
+    }
+    if (mode === 'typewriter' && st.rev < 1 && li === L.lines.length - 1 && Math.floor(lt * 2.5) % 2 === 0) { ctx.globalAlpha = st.alpha; ctx.fillStyle = color; ctx.fillRect(x - L.space + 4 * u, base - L.size * 0.8, 4 * u, L.size * 0.9); }
+    if (mode === 'mask') ctx.restore();
+  });
+  ctx.globalAlpha = 1; ctx.shadowColor = 'transparent'; setTrack(ctx, 0);
+}
+function shapePath(ctx, kind, x, y, w, h, r) {
+  ctx.beginPath();
+  if (kind === 'circle') ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, 6.283);
+  else if (kind === 'star') { for (let k = 0; k < 10; k++) { const a = -Math.PI / 2 + (k * Math.PI) / 5, rr2 = k % 2 ? 0.42 : 1; ctx.lineTo(x + w / 2 + Math.cos(a) * (w / 2) * rr2, y + h / 2 + Math.sin(a) * (h / 2) * rr2); } ctx.closePath(); }
+  else if (kind === 'heart') { const cx = x + w / 2; ctx.moveTo(cx, y + h * 0.95); ctx.bezierCurveTo(x - w * 0.15, y + h * 0.45, x + w * 0.15, y - h * 0.1, cx, y + h * 0.28); ctx.bezierCurveTo(x + w * 0.85, y - h * 0.1, x + w * 1.15, y + h * 0.45, cx, y + h * 0.95); ctx.closePath(); }
+  else if (kind === 'pin') { const cx = x + w / 2, r2 = w / 2; ctx.arc(cx, y + r2, r2, Math.PI * 0.85, Math.PI * 0.15); ctx.lineTo(cx, y + h); ctx.closePath(); }
+  else { rrect(ctx, x, y, w, h, Math.min(r, w / 2, h / 2)); }
+}
+function drawOneElement(S, el, lt, d, hits) {
+  if (el.hidden || lt < (+el.start || 0) - 1e-3 || lt > elEnd(el, d) + 1e-3) return;
+  const { ctx, W, H, u, assets } = S;
+  const cx = (el.x ?? 0.5) * W, cy = (el.y ?? 0.5) * H;
+  let bw = Math.max(4, (el.w || 0.3) * W), bh, L = null, media = null;
+  if (el.type === 'text') { L = textLayout(S, el); bh = L.h; bw = L.maxW; }
+  else if (el.type === 'logo') { const lg = assets?.logo; bh = lg ? bw * (lg.height / lg.width) : bw; }
+  else if (el.type === 'image') { media = assets?.media?.[el.media]; bh = bw * (el.fit === 'contain' && media ? media.height / media.width : (+el.ar || 0.66)); }
+  else if (el.type === 'video') { media = assets?.videos?.[el.media]; bh = bw * (+el.ar || 0.5625); }
+  else if (el.type === 'shape') bh = el.kind === 'line' || el.kind === 'arrow' ? Math.max(8 * u, bw * 0.06) : ['circle', 'star', 'heart', 'check', 'pin'].includes(el.kind) && !el.ar ? bw : bw * (+el.ar || 0.3);
+  else if (el.type === 'avatar') bh = bw * 1.15;
+  else return;
+  const st = animState(S, el, lt, d, bw, bh, cx, cy);
+  if (st.alpha <= 0.002) return;
+  ctx.save();
+  ctx.translate(cx + st.dx, cy + st.dy);
+  if (el.rot || st.rot) ctx.rotate(((+el.rot || 0) * Math.PI) / 180 + (st.rot || 0));
+  if (st.sc !== 1) ctx.scale(st.sc, st.sc);
+  if (st.blur > 0.3 && 'filter' in ctx) ctx.filter = `blur(${st.blur.toFixed(1)}px)`;
+  ctx.globalAlpha = clamp(st.alpha);
+  const x0 = -bw / 2, y0 = -bh / 2;
+  if (el.type === 'text') drawTextEl(S, el, L, st, lt, x0, y0);
+  else if (el.type === 'logo') {
+    const lg = assets?.logo;
+    if (lg) {
+      if (el.plate) { ctx.fillStyle = '#fff'; rrect(ctx, x0 - bw * 0.1, y0 - bw * 0.1, bw * 1.2, bh + bw * 0.2, bw * 0.12); ctx.fill(); }
+      ctx.drawImage(lg, x0, y0, bw, bh);
+    } else drawLogo(S, 0, 0, Math.min(bw, bh), 1);
+  } else if (el.type === 'image' || el.type === 'video') {
+    if (el.shadow) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = 40 * u; ctx.shadowOffsetY = 16 * u; ctx.fillStyle = '#000'; rrect(ctx, x0, y0, bw, bh, +el.radius * u || 0); ctx.fill(); ctx.restore(); }
+    ctx.save(); rrect(ctx, x0, y0, bw, bh, (+el.radius || 0) * u); ctx.clip();
+    const ready = media && (el.type === 'image' || media.readyState >= 2);
+    if (ready) { if (el.fit === 'contain') { ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x0, y0, bw, bh); const sw = media.videoWidth || media.width, sh = media.videoHeight || media.height, k = Math.min(bw / sw, bh / sh); ctx.drawImage(media, -sw * k / 2, -sh * k / 2, sw * k, sh * k); } else coverDraw(ctx, media, x0, y0, bw, bh, 0.5); }
+    else { ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(x0, y0, bw, bh); if (assets?.preview) { setFont(ctx, S.F.body, 700, 26 * u); setTrack(ctx, 0); ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.textAlign = 'center'; ctx.fillText(el.media ? 'Chargement…' : el.type === 'video' ? 'Choisis une vidéo' : 'Choisis une image', 0, 9 * u); } }
+    ctx.restore();
+  } else if (el.type === 'shape') {
+    const fill = colorOf(S, el.fill || 'accent');
+    if (el.kind === 'line' || el.kind === 'arrow') {
+      ctx.strokeStyle = fill; ctx.lineWidth = bh; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(x0 + bh / 2, 0); ctx.lineTo(-x0 - (el.kind === 'arrow' ? bh * 2 : bh / 2), 0); ctx.stroke();
+      if (el.kind === 'arrow') { ctx.fillStyle = fill; ctx.beginPath(); ctx.moveTo(-x0, 0); ctx.lineTo(-x0 - bh * 4, -bh * 2.4); ctx.lineTo(-x0 - bh * 4, bh * 2.4); ctx.closePath(); ctx.fill(); }
+    } else if (el.kind === 'check') {
+      ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(0, 0, Math.min(bw, bh) / 2, 0, 6.283); ctx.fill();
+      ctx.strokeStyle = onColor(fill.startsWith('#') ? fill : '#5A3DF0'); ctx.lineWidth = bw * 0.1; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(-bw * 0.2, 0); ctx.lineTo(-bw * 0.05, bw * 0.16); ctx.lineTo(bw * 0.23, -bw * 0.14); ctx.stroke();
+    } else { ctx.fillStyle = fill; shapePath(ctx, el.kind, x0, y0, bw, bh, (+el.radius || 0) * u); ctx.fill(); }
+  } else if (el.type === 'avatar') {
+    const av = el.avatar?.kind === 'illustre' ? el.avatar.config : DEFAULT_CHAR;
+    const sp = S.sceneVoice;
+    let talk = 0, act = 0;
+    if (el.talk === 'voice' && sp) { const vl = lt - VOICE_DELAY; talk = envAt(sp, vl); act = (envAt(sp, vl - 0.4) + talk + envAt(sp, vl + 0.4)) / 3; }
+    else if (el.talk === 'mime' || (el.talk === 'voice' && !sp)) { const on = el.talk === 'mime'; talk = on ? synthTalk(lt) : 0; act = on ? 0.55 : 0; }
+    const g = el.gesture || 'auto';
+    const gesture = g === 'idle' ? 0 : g === 'wave' ? 0.75 + 0.25 * Math.sin(lt * 7) : g === 'pointLeft' || g === 'pointRight' ? 1 : clamp(Math.sin(lt * 0.8 + 0.6) * 1.7 - 0.4) * clamp(act * 2);
+    const dir = g === 'pointLeft' ? -1 : g === 'pointRight' ? 1 : (el.x ?? 0.5) > 0.5 ? -1 : 1;
+    if (el.frame === 'circle' || el.frame === 'card') {
+      ctx.save(); ctx.fillStyle = mix(S.pal.base, S.pal.accent, 0.35);
+      if (el.frame === 'circle') { ctx.beginPath(); ctx.arc(0, 0, Math.min(bw, bh) / 2, 0, 6.283); } else rrect(ctx, x0, y0, bw, bh, 28 * u);
+      ctx.fill(); ctx.clip();
+      drawCharacter(ctx, av, 0, el.frame === 'circle' ? Math.min(bw, bh) / 2 * 1.05 : bh / 2, (el.frame === 'circle' ? Math.min(bw, bh) * 1.05 : bh * 0.95) / 820, { t: lt, talk, gesture, dir, outfit: S.b.colors.primary, accent: S.b.colors.secondary });
+      ctx.restore();
+    } else drawCharacter(ctx, av, 0, bh / 2, (bh * 0.95) / 820, { t: lt, talk, gesture, dir, outfit: S.b.colors.primary, accent: S.b.colors.secondary });
+  }
+  ctx.restore();
+  ctx.filter = 'none';
+  if (hits) hits.push({ id: el.id, x: cx + st.dx - bw / 2 * st.sc, y: cy + st.dy - bh / 2 * st.sc, w: bw * st.sc, h: bh * st.sc, rot: +el.rot || 0, cx: cx, cy: cy, bw, bh });
+}
+/**
+ * Estime l'instant de début de chaque segment (mot ou phrase) dans une voix,
+ * en répartissant le texte sur les passages parlés détectés (pauses respectées).
+ * Renvoie des temps en secondes depuis le début de la voix. C'est une estimation,
+ * pas une reconnaissance vocale.
+ */
+export function estimateTimes(voice, weights) {
+  const env = voice?.env, rate = voice?.rate || 100;
+  const n = env?.length || 0, tot = weights.reduce((a, b) => a + b, 0) || 1;
+  if (n < 10) { let acc = 0; return weights.map((w) => { const t = (acc / tot) * (voice?.duration || 1); acc += w; return t; }); }
+  const on = new Uint8Array(n);
+  for (let i = 0; i < n; i++) on[i] = env[i] > 0.1 ? 1 : 0;
+  for (let i = 0, gap = 0; i < n; i++) { if (on[i]) { if (gap > 0 && gap < 0.14 * rate) for (let k = i - gap; k < i; k++) on[k] = 1; gap = 0; } else gap++; }
+  const cum = new Float32Array(n + 1);
+  for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + on[i];
+  const voiced = cum[n];
+  if (voiced < 0.3 * rate) { let acc = 0; return weights.map((w) => { const t = (acc / tot) * voice.duration; acc += w; return t; }); }
+  let acc = 0;
+  return weights.map((w) => {
+    const target = (acc / tot) * voiced; acc += w;
+    let lo = 0, hi = n;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid + 1] > target) hi = mid; else lo = mid + 1; }
+    while (lo < n && !on[lo]) lo++;
+    return Math.min(lo, n - 1) / rate;
+  });
+}
+export function drawElements(S, list, lt, d, hits) { for (const el of list || []) drawOneElement(S, el, lt, d, hits); }
 
 const buffers = new WeakMap();
 function bufFor(ctx, W, H) {
@@ -1457,7 +1748,8 @@ function bufFor(ctx, W, H) {
 }
 
 /** Dessine l'image du projet au temps `time` (en secondes). */
-export function renderFrame(ctx, W, H, project, brand, assets, time) {
+export function renderFrame(ctx, W, H, project, brand, assets, time, opts = {}) {
+  const hits = opts.hits || null;
   const B = normBrand(brand);
   const { items, total } = timeline(project);
   if (!items.length) { ctx.fillStyle = B.colors.dark; ctx.fillRect(0, 0, W, H); return; }
@@ -1465,7 +1757,7 @@ export function renderFrame(ctx, W, H, project, brand, assets, time) {
   const active = items.filter((it) => t >= it.start && t < it.end);
   if (!active.length) active.push(items[items.length - 1]);
   if (active.length === 1) {
-    drawScene(ctx, W, H, active[0], t - active[0].start, B, assets, t, project.text);
+    drawScene(ctx, W, H, active[0], t - active[0].start, B, assets, t, project.text, hits);
   } else {
     const [A, N] = active.slice(-2);
     const q = clamp((t - N.start) / (N.tr || TR));
@@ -1473,7 +1765,7 @@ export function renderFrame(ctx, W, H, project, brand, assets, time) {
     const buf = bufFor(ctx, W, H);
     const ca = buf.a.getContext('2d'), cb = buf.b.getContext('2d');
     drawScene(ca, W, H, A, t - A.start, B, assets, t, project.text);
-    drawScene(cb, W, H, N, t - N.start, B, assets, t, project.text);
+    drawScene(cb, W, H, N, t - N.start, B, assets, t, project.text, hits);
     const kind = N.scene.transition;
     ctx.save();
     if (kind === 'glisse') {
@@ -1496,6 +1788,15 @@ export function renderFrame(ctx, W, H, project, brand, assets, time) {
       ctx.drawImage(buf.a, 0, 0); ctx.globalAlpha = e; ctx.drawImage(buf.b, 0, 0);
     }
     ctx.restore();
+  }
+  // Éléments globaux : par-dessus toute la vidéo, une seule fois même pendant les transitions
+  const globals = project.globals || [];
+  if (globals.length) {
+    const cur = active[active.length - 1];
+    const S = makeS(ctx, W, H, cur, t - cur.start, B, assets, t, project.text);
+    TS = 1; BS = 1;
+    const list = globals.filter((g) => !(g.exclude || []).includes(cur.scene.id));
+    drawElements(S, list, t, total, hits ? hits.globals || (hits.globals = []) : null);
   }
   if (project.fadeOut !== false && t > total - 0.5) {
     ctx.fillStyle = `rgba(0,0,0,${E.inOutCubic(clamp((t - (total - 0.5)) / 0.5))})`; ctx.fillRect(0, 0, W, H);
@@ -1580,6 +1881,14 @@ function loadVideo(id, loader) {
     return v;
   });
 }
+/** Tous les éléments (scènes + globaux) avec leur décalage temporel absolu. */
+export function allElements(project) {
+  const out = [];
+  const { items, total } = timeline(project);
+  for (const it of items) for (const el of it.scene.elements || []) out.push({ el, offset: it.start, d: +it.scene.duration || 4, item: it, global: false });
+  for (const el of project.globals || []) out.push({ el, offset: 0, d: total, item: null, global: true });
+  return out;
+}
 /** opts : { media(id) → Promise<Blob>, preview: booléen } */
 export async function prepareAssets(project, brand, opts = {}) {
   const B = normBrand(brand);
@@ -1599,6 +1908,21 @@ export async function prepareAssets(project, brand, opts = {}) {
     }
     await Promise.all(tasks);
   }
+  // Éléments : images et vidéos importées, effets sonores, son des clips
+  res.media = {}; res.sfx = {}; res.clipAudio = {};
+  {
+    const tasks = [];
+    for (const { el } of allElements(project)) {
+      if (el.hidden) continue;
+      if (el.type === 'image' && el.media && opts.media) tasks.push(loadPhoto(el.media, opts.media).then((b) => { if (b) res.media[el.media] = b; }));
+      if (el.type === 'video' && el.media && opts.media) {
+        tasks.push(loadVideo(el.media, opts.media).then((v) => { if (v) res.videos[el.media] = v; }));
+        if (!opts.preview && !el.muted) tasks.push(cachedMedia(`vaudio:${el.media}`, async () => decodeAudio(await (await opts.media(el.media)).arrayBuffer())).then((b) => { if (b) res.clipAudio[el.media] = b; }));
+      }
+      if (el.anim?.sfx) tasks.push(renderSfx(el.anim.sfx).then((b) => { if (b) res.sfx[el.anim.sfx] = b; }));
+    }
+    await Promise.all(tasks);
+  }
   const mus = project.music;
   if (mus && (mus.track || mus.media)) {
     let buf = null, key = '';
@@ -1615,9 +1939,27 @@ export async function prepareAssets(project, brand, opts = {}) {
 }
 
 /** Cale les vidéos d'avatar sur l'image exacte à exporter. */
+function clipTarget(el, lt, v) {
+  const end = el.trimOut != null ? +el.trimOut : (v.duration || 0);
+  return clamp((+el.trimIn || 0) + (lt - (+el.start || 0)) * (+el.speed || 1), 0, Math.max(0, Math.min(end, (v.duration || 0)) - 0.04));
+}
 export async function seekVideos(project, assets, time, fps = 30) {
   if (!assets?.videos || !Object.keys(assets.videos).length) return;
   const jobs = [];
+  for (const { el, offset, d } of allElements(project)) {
+    if (el.type !== 'video' || el.hidden) continue;
+    const v = assets.videos[el.media]; if (!v) continue;
+    const lt = time - offset;
+    if (lt < (+el.start || 0) - 0.05 || lt > elEnd(el, d) + 0.05) continue;
+    const target = clipTarget(el, lt, v);
+    if (Math.abs(v.currentTime - target) < 0.4 / fps && !v.seeking) continue;
+    jobs.push(new Promise((res) => {
+      let fin = false; const done = () => { if (fin) return; fin = true; clearTimeout(to); res(); };
+      const to = setTimeout(done, 3000);
+      v.addEventListener('seeked', () => { if (v.requestVideoFrameCallback) { v.requestVideoFrameCallback(done); setTimeout(done, 60); } else done(); }, { once: true });
+      v.currentTime = target;
+    }));
+  }
   for (const it of timeline(project).items) {
     if (time < it.start || time >= it.end) continue;
     const v = it.scene.props?.video && assets.videos[it.scene.props.video];
@@ -1625,9 +1967,9 @@ export async function seekVideos(project, assets, time, fps = 30) {
     const target = clamp(time - it.start - VOICE_DELAY, 0, Math.max(0, (v.duration || 0) - 0.04));
     if (Math.abs(v.currentTime - target) < 0.4 / fps && !v.seeking) continue;
     jobs.push(new Promise((res) => {
-      const done = () => { clearTimeout(to); res(); };
+      let fin = false; const done = () => { if (fin) return; fin = true; clearTimeout(to); res(); };
       const to = setTimeout(done, 3000);
-      v.addEventListener('seeked', () => (v.requestVideoFrameCallback ? v.requestVideoFrameCallback(done) : done()), { once: true });
+      v.addEventListener('seeked', () => { if (v.requestVideoFrameCallback) { v.requestVideoFrameCallback(done); setTimeout(done, 60); } else done(); }, { once: true });
       v.currentTime = target;
     }));
   }
@@ -1660,6 +2002,17 @@ export function syncPreview(project, assets, time, playing, onSeeked) {
         if (vo.el.paused) { vo.el.currentTime = lt; vo.el.play().catch(() => {}); } else if (Math.abs(vo.el.currentTime - lt) > 0.3) vo.el.currentTime = lt;
       } else if (!vo.el.paused) vo.el.pause();
     }
+  }
+  for (const { el, offset, d } of allElements(project)) {
+    if (el.type !== 'video' || el.hidden) continue;
+    const v = assets.videos?.[el.media]; if (!v) continue;
+    const lt = time - offset, on = lt >= (+el.start || 0) && lt <= elEnd(el, d);
+    if (!on) continue;
+    actV.add(v);
+    const target = clipTarget(el, lt, v);
+    v.muted = !!el.muted; v.volume = clamp(+el.volume || 0); v.playbackRate = clamp(+el.speed || 1, 0.25, 4);
+    if (playing) { if (v.paused) { v.currentTime = target; v.play().catch(() => {}); } else if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = target; }
+    else { if (!v.paused) v.pause(); if (Math.abs(v.currentTime - target) > 0.03 && !v.seeking) { v.addEventListener('seeked', onSeeked, { once: true }); v.currentTime = target; } }
   }
   const mu = assets.music;
   if (mu?.el) {
@@ -1708,7 +2061,7 @@ async function pickAudioConfig(sampleRate) {
   return null;
 }
 /** Mixe la musique et les voix ; la musique baisse automatiquement quand quelqu'un parle. */
-async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, volume = 0.8, voices, total }) {
+async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, volume = 0.8, voices, total, sfx = [], clips = [] }) {
   const sr = 48000;
   const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr);
   const vs = [...voices].sort((x, y) => x.at - y.at);
@@ -1726,6 +2079,14 @@ async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, vo
     src.connect(g); g.connect(off.destination); src.start(0, Math.min(offset, Math.max(0, decoded.duration - 0.1)));
   }
   for (const v of vs) { const src = off.createBufferSource(); src.buffer = v.buffer; src.connect(off.destination); src.start(Math.max(0, v.at)); }
+  for (const e of sfx) { if (!e.buffer || e.at >= total) continue; const src = off.createBufferSource(); src.buffer = e.buffer; const g = off.createGain(); g.gain.value = clamp(e.vol ?? 0.7); src.connect(g); g.connect(off.destination); src.start(Math.max(0, e.at)); }
+  for (const c of clips) {
+    if (!c.buffer || c.at >= total) continue;
+    const src = off.createBufferSource(); src.buffer = c.buffer; src.playbackRate.value = c.rate || 1;
+    const g = off.createGain(); g.gain.setValueAtTime(0, Math.max(0, c.at)); g.gain.linearRampToValueAtTime(c.vol, Math.max(0, c.at) + 0.05);
+    g.gain.setValueAtTime(c.vol, Math.max(0, c.at + c.dur - 0.06)); g.gain.linearRampToValueAtTime(0, Math.max(0, c.at + c.dur));
+    src.connect(g); g.connect(off.destination); src.start(Math.max(0, c.at), Math.max(0, c.offset), Math.max(0.05, c.dur * (c.rate || 1)));
+  }
   return off.startRendering();
 }
 
@@ -1745,9 +2106,19 @@ export async function exportVideo(opts) {
     .filter((it) => it.scene.type === 'presentateur' && it.scene.props?.voice && assets?.voices?.[it.scene.props.voice])
     .map((it) => { const v = assets.voices[it.scene.props.voice]; const at = it.start + VOICE_DELAY; return { buffer: v.buffer, at, end: Math.min(it.end, at + v.duration) }; });
   const am = assets?.music;
-  if (music || am || voices.length) {
+  const sfxEv = [], clips = [];
+  for (const { el, offset, d } of allElements(project)) {
+    if (el.hidden) continue;
+    if (el.anim?.sfx && assets?.sfx?.[el.anim.sfx]) sfxEv.push({ buffer: assets.sfx[el.anim.sfx], at: offset + (+el.start || 0) + (+el.anim.inDelay || 0), vol: el.anim.sfxVol ?? 0.7 });
+    if (el.type === 'video' && !el.muted && assets?.clipAudio?.[el.media]) {
+      const st = +el.start || 0, dur = elEnd(el, d) - st, buf = assets.clipAudio[el.media];
+      const maxDur = ((el.trimOut != null ? +el.trimOut : buf.duration) - (+el.trimIn || 0)) / (+el.speed || 1);
+      clips.push({ buffer: buf, at: offset + st, offset: +el.trimIn || 0, dur: Math.max(0.05, Math.min(dur, maxDur)), rate: +el.speed || 1, vol: clamp(+el.volume ?? 1) });
+    }
+  }
+  if (music || am || voices.length || sfxEv.length || clips.length) {
     onProgress?.({ phase: 'prepare', progress: 0 });
-    audioBuf = await mixAudio(music ? { music, volume, voices, total: frames / fps } : { musicBuffer: am?.buffer, offset: am?.offset || 0, duck: am?.duck !== false, volume: am?.volume ?? volume, voices, total: frames / fps });
+    audioBuf = await mixAudio(music ? { music, volume, voices, total: frames / fps, sfx: sfxEv, clips } : { musicBuffer: am?.buffer, offset: am?.offset || 0, duck: am?.duck !== false, volume: am?.volume ?? volume, voices, total: frames / fps, sfx: sfxEv, clips });
     audio = await pickAudioConfig(audioBuf.sampleRate);
   }
   const target = new ArrayBufferTarget();

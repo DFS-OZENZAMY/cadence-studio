@@ -3,6 +3,8 @@ import * as V from './engine.js';
 import { drawCharacter, SKINS, FURS, HAIR_COLORS, EYE_COLORS, OUTFIT_COLORS, OPTIONS, PRESETS, DEFAULT_CHAR, normChar, randomChar } from './avatar.js';
 const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND, DOMAINS, FONT_LIBRARY, MUSIC_TRACKS } = V;
 import { renderTrack } from './music.js';
+import { SFX, SFX_FOR_ANIM, renderSfx } from './sfx.js';
+const { ELEMENT_TYPES, ANIM_IN, ANIM_OUT, ANIM_EMPH, EASINGS, SHAPES, GESTURES, TEXT_ONLY_ANIMS } = V;
 
 /* =========================================================
    Utilitaires
@@ -58,6 +60,19 @@ const ICONS = {
   upload: '<path d="M12 21V9M7 14l5-5 5 5M4 4h16"/>',
   spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  text: '<path d="M5 6V4h14v2M12 4v16M9 20h6"/>',
+  shape: '<rect x="3" y="3" width="8" height="8" rx="1.5"/><circle cx="17" cy="17" r="4"/><path d="m17 3 4 7h-8z"/>',
+  video: '<rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/>',
+  logo: '<path d="M12 3 4 7v10l8 4 8-4V7z"/><path d="m4 7 8 4 8-4M12 11v10"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.8 0 3.4-.5 4.8-1.3"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlock: '<rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  speaker: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.5 8.5 20 20M8.5 15.5 20 4"/>',
+  tracks: '<path d="M3 6h18M3 12h12M3 18h16"/>',
 };
 const ic = (n, cls = '') => `<svg class="ic ${n === 'play' || n === 'pause' || n === 'rec' || n === 'stop' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#5A3DF0"/><path d="M11 9.5v13l11-6.5z" fill="#fff"/><circle cx="24.5" cy="8.5" r="3" fill="#FF8A3D"/></svg>`;
@@ -1137,15 +1152,18 @@ function renderEditor() {
     </header>
     <div class="ed-main">
       <div class="ed-center">
-        <div class="ed-stage" id="edStage"><canvas id="edCanvas"></canvas></div>
+        <div class="ed-stage" id="edStage"><div class="stage-tools"><button class="btn primary" data-ed="addElement" data-scope="scene">${ic('plus')}Ajouter un élément</button></div>
+          <div class="canvas-wrap" id="canvasWrap"><canvas id="edCanvas"></canvas><div class="sel-layer" id="selLayer"></div></div></div>
         <div class="ed-transport">
           <button class="icon-btn" data-ed="toStart" title="Revenir au début (Début)" aria-label="Revenir au début">${ic('start')}</button>
           <button class="play-btn" data-ed="play" id="playBtn" aria-label="Lecture">${ic('play')}</button>
           <span class="timecode" id="timecode">00:00.0 <span>/ 00:00.0</span></span>
           <div class="scrub" id="scrub" role="slider" aria-label="Position" tabindex="0"><div class="scrub-track" id="scrubTrack"></div><div class="scrub-fill" id="scrubFill"></div><div class="scrub-knob" id="scrubKnob"></div></div>
+ <button class="icon-btn" data-ed="toggleTracks" id="tracksBtn" title="Pistes de la scène" aria-label="Pistes de la scène" style="color:${ed.showTracks ? '#fff' : ''}">${ic('tracks')}</button>
  <button class="music-chip" data-ed="music" id="musicChip" title="Musique de la vidéo">${ic('musicnav')}<span>${esc(musicLabel())}</span></button>
           <button class="icon-btn" data-ed="loop" id="loopBtn" title="Lecture en boucle" aria-label="Boucle" style="color:${ed.loop ? '#fff' : ''}">${ic('loop')}</button>
         </div>
+        <div class="tracks" id="tracks" ${ed.showTracks ? '' : 'hidden'}></div>
         <div class="film" id="film"></div>
       </div>
       <aside class="ed-side">
@@ -1167,6 +1185,7 @@ function fitCanvas() {
   const k = Math.min(aw / f.w, ah / f.h);
   const cw = Math.max(80, Math.floor(f.w * k)), ch = Math.max(80, Math.floor(f.h * k));
   c.style.width = `${cw}px`; c.style.height = `${ch}px`;
+  const wrap = $('#canvasWrap'); if (wrap) { wrap.style.width = `${cw}px`; wrap.style.height = `${ch}px`; }
   const dpr = Math.min(2, devicePixelRatio || 1);
   c.width = Math.min(f.w, Math.round(cw * dpr)); c.height = Math.round(c.width * f.h / f.w);
   ed.dirty = true;
@@ -1176,6 +1195,7 @@ function loop(ts) {
   const dt = ed.last ? (ts - ed.last) / 1000 : 0; ed.last = ts;
   const total = V.timeline(projForRender()).total;
   if (ed.playing) {
+    playSfxBetween(ed.time, ed.time + dt);
     ed.time += dt;
     if (ed.time >= total) { if (ed.loop) ed.time = 0; else { ed.time = total; setPlaying(false); } }
     ed.dirty = true;
@@ -1183,8 +1203,9 @@ function loop(ts) {
   V.syncPreview(projForRender(), ed.assets, ed.time, ed.playing, () => { if (ed) ed.dirty = true; });
   if (ed.dirty) {
     const c = $('#edCanvas');
-    if (c) V.renderFrame(c.getContext('2d'), c.width, c.height, projForRender(), ed.brand, ed.assets, ed.time);
+    if (c) { const hits = []; V.renderFrame(c.getContext('2d'), c.width, c.height, projForRender(), ed.brand, ed.assets, ed.time, { hits }); ed.hits = hits; }
     updateTransport(total);
+    drawSelection(); updatePlayheadTracks();
     ed.dirty = false;
   }
   ed.raf = requestAnimationFrame(loop);
@@ -1239,7 +1260,8 @@ const redrawClip = debounce((i) => { const c = $(`.clip[data-i="${i}"] canvas`);
 function renderInspector() {
   const box = $('#inspector'); if (!box || !ed) return;
   $$('.ed-tabs button').forEach((b) => b.setAttribute('aria-selected', b.dataset.t === ed.tab));
-  if (ed.tab === 'video') { box.innerHTML = videoPanel(); return; }
+  if (ed.selEl && selElement()) { box.innerHTML = elementPanel(); hydrateInspector(); return; }
+  if (ed.tab === 'video') { box.innerHTML = videoPanel(); hydrateInspector(); return; }
   const s = curScene();
   if (!s) { box.innerHTML = `<div class="empty"><span>Ajoute une première scène avec le bouton « Ajouter une scène ».</span></div>`; return; }
   const def = SCENES[s.type];
@@ -1247,6 +1269,7 @@ function renderInspector() {
     <div class="insp-head"><div><h2>${esc(def.label)}</h2><p>Scène ${ed.sel + 1} sur ${scenesOf().length}. ${esc(def.hint)}.</p></div>
       <div class="row" style="gap:2px"><button class="icon-btn" data-ed="dupScene" title="Dupliquer (Ctrl+D)" aria-label="Dupliquer la scène">${ic('copy')}</button>
       <button class="icon-btn" data-ed="delScene" title="Supprimer (Suppr)" aria-label="Supprimer la scène">${ic('trash')}</button></div></div>
+    ${elementsList('scene')}
     ${def.fields.map((f) => fieldHtml(f, s.props)).join('')}
     ${aiVideoSection(s)}
     ${textSection('scene', s)}
@@ -1277,6 +1300,7 @@ function fieldHtml(f, props) {
       <div class="row"><select data-tts-voice aria-label="Voix IA" style="flex:1">${Object.entries(TTS_VOICES).map(([g, l]) => `<optgroup label="${g}">${l.map((n) => `<option ${(sc.props.ttsVoice || 'Aria') === n ? 'selected' : ''}>${n}</option>`).join('')}</optgroup>`).join('')}</select>
         <button class="btn" data-ed="ttsVoice" ${state.ai.configured && !job && chars ? '' : 'disabled'}>${ic('spark')}Voix IA</button></div>
       <span class="hint" style="color:var(--stage-muted)">${state.ai.configured ? `Voix IA premium : environ ${fmtUsd(Math.max(0.01, (chars / 1000) * 0.1))}.` : 'Voix IA premium : ajoute une clé fal.ai dans Réglages.'}</span>
+      ${v ? `<button class="btn" data-ed="syncTitles" style="justify-self:start">${ic('text')}Créer des titres synchronisés avec la voix</button>` : ''}
       <div class="free-tts">
         <div class="label" style="display:flex;justify-content:space-between"><span>Voix gratuite</span><span class="badge-free">Gratuit, illimité</span></div>
         <div class="row"><select data-free-voice aria-label="Voix gratuite" style="flex:1">${FREE_VOICES.map((fv) => `<option value="${fv.key}" ${(sc.props.freeVoice || FREE_VOICES[0].key) === fv.key ? 'selected' : ''}>${esc(fv.label)}</option>`).join('')}</select>
@@ -1320,6 +1344,340 @@ function aiVideoSection(s) {
     ${state.ai.configured ? '' : '<span class="hint" style="color:var(--stage-muted)">Ajoute une clé fal.ai dans Réglages pour générer.</span>'}`;
   return `<div class="insp-sec"><div class="label">Vidéo IA de l’avatar</div>${body}</div>`;
 }
+/* =========================================================
+   Éléments libres : sélection, propriétés, ajout, pistes
+   ========================================================= */
+const EL_ICON = { text: 'text', logo: 'logo', image: 'image', video: 'video', shape: 'shape', avatar: 'avatars' };
+const elList = (scope) => { if (scope === 'global') return (P().data.globals ||= []); const sc = curScene(); return sc ? (sc.elements ||= []) : []; };
+function selElement() { if (!ed?.selEl || !curScene()) return null; return elList(ed.selEl.scope).find((e) => e.id === ed.selEl.id) || null; }
+function selectEl(scope, id) {
+  ed.selEl = id ? { scope, id } : null;
+  renderInspector(); renderTracks(); ed.dirty = true;
+}
+const elLabel = (el) => (el.type === 'text' ? (String(el.text || '').replace(/\*/g, '').slice(0, 32) || 'Texte') : el.type === 'avatar' ? (el.avatar?.name || 'Avatar') : el.type === 'shape' ? SHAPES[el.kind] || 'Forme' : ELEMENT_TYPES[el.type]);
+const sceneDur = () => +curScene()?.duration || 4;
+const scopeDur = (scope) => (scope === 'global' ? V.timeline(projForRender()).total : sceneDur());
+
+function elementsList(scope) {
+  const list = scope === 'global' ? (P().data.globals || []) : (curScene()?.elements || []);
+  return `<div class="insp-sec el-sec"><div class="label" style="display:flex;justify-content:space-between;align-items:center">${scope === 'global' ? 'Éléments globaux (toute la vidéo)' : 'Éléments de la scène'}
+      <button class="btn ghost" data-ed="addElement" data-scope="${scope}" style="height:26px;padding:0 8px;font-size:12px">${ic('plus')}Ajouter</button></div>
+    ${list.length ? `<div class="el-list">${[...list].reverse().map((el) => `<div class="el-row ${ed.selEl?.id === el.id ? 'on' : ''}" data-ed="selEl" data-scope="${scope}" data-id="${el.id}">
+        <span class="el-ic">${ic(EL_ICON[el.type])}</span><span class="el-name">${esc(elLabel(el))}</span>
+        ${el.anim?.sfx ? `<span class="el-flag" title="Son : ${esc(SFX[el.anim.sfx]?.name || '')}">${ic('speaker')}</span>` : ''}
+        <button class="icon-btn" data-ed="elHide" data-scope="${scope}" data-id="${el.id}" aria-label="${el.hidden ? 'Afficher' : 'Masquer'}" title="${el.hidden ? 'Afficher' : 'Masquer'}">${ic(el.hidden ? 'eyeOff' : 'eye')}</button>
+        <button class="icon-btn" data-ed="elLock" data-scope="${scope}" data-id="${el.id}" aria-label="${el.locked ? 'Déverrouiller' : 'Verrouiller'}" title="${el.locked ? 'Déverrouiller' : 'Verrouiller'}">${ic(el.locked ? 'lock' : 'unlock')}</button></div>`).join('')}</div>`
+      : `<p class="hint" style="color:var(--stage-muted)">${scope === 'global' ? 'Un logo, un slogan ou un mot-clé qui reste visible sur toutes les scènes.' : 'Ajoute des textes, ton logo, des images, des vidéos, des formes ou un avatar, où tu veux sur la scène.'}</p>`}
+  </div>`;
+}
+
+/* ---------- Panneau de propriétés ---------- */
+const COLOR_CHOICES = [['auto', 'Auto'], ['accent', 'Accent'], ['primary', 'Principale'], ['secondary', 'Secondaire'], ['#FFFFFF', 'Blanc'], ['#111111', 'Noir']];
+function colorRow(k, cur, withNone = false) {
+  const swatchOf = (v) => (v === 'auto' ? 'linear-gradient(135deg,#fff 50%,#111 50%)' : v === 'accent' ? ed.brand.colors.secondary : v === 'primary' ? ed.brand.colors.primary : v === 'secondary' ? ed.brand.colors.secondary : v);
+  const custom = cur && cur.startsWith('#') && !COLOR_CHOICES.some(([v]) => v === cur);
+  return `<div class="color-chips">${withNone ? `<button class="cchip ${!cur ? 'on' : ''}" data-elset="${k}" data-v="" title="Aucun">${ic('x')}</button>` : ''}${COLOR_CHOICES.filter(([v]) => !(withNone && v === 'auto')).map(([v, l]) => `<button class="cchip ${cur === v ? 'on' : ''}" data-elset="${k}" data-v="${v}" title="${l}" style="background:${swatchOf(v)}"></button>`).join('')}
+    <label class="cchip custom ${custom ? 'on' : ''}" title="Couleur personnalisée" style="background:${custom ? cur : 'conic-gradient(red,yellow,lime,cyan,blue,magenta,red)'}"><input type="color" data-elk="${k}" value="${custom ? cur : '#ff8a3d'}"></label></div>`;
+}
+const rng = (k, label, v, min, max, step, fmt) => `<div class="field"><span>${label}</span><div class="range-row"><input type="range" min="${min}" max="${max}" step="${step}" value="${v}" data-elk="${k}" data-num="1"><output data-elout="${k}">${fmt(v)}</output></div></div>`;
+const sel = (k, label, opts, v) => `<label class="field"><span>${label}</span><select data-elk="${k}">${Object.entries(opts).map(([a, b]) => `<option value="${a}" ${String(v) === a ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select></label>`;
+const tog = (k, label, v) => `<label class="switch"><input type="checkbox" data-elk="${k}" ${v ? 'checked' : ''}>${label}</label>`;
+const pct = (v) => `${Math.round(v * 100)} %`, sec = (v) => `${(+v).toFixed(1).replace('.', ',')} s`;
+
+function elementPanel() {
+  const el = selElement(), scope = ed.selEl.scope, D = scopeDur(scope), a = el.anim || {};
+  const fonts = { titre: 'Police des titres', texte: 'Police du texte', ...Object.fromEntries(Object.keys(FONT_LIBRARY).map((f) => [f, f])) };
+  let content = '';
+  if (el.type === 'text') content = `
+    <label class="field"><span>Texte</span><textarea data-elk="text" rows="3">${esc(el.text || '')}</textarea></label>
+    <p class="hint" style="color:var(--stage-muted)">Astuce : entoure un mot d’astérisques, *comme ceci*, pour le mettre en couleur d’accent.</p>
+    ${sel('font', 'Police', fonts, el.font || 'titre')}
+    ${rng('size', 'Taille', el.size || 72, 16, 320, 2, (v) => `${v} px`)}
+    <div class="grid-2">${sel('weight', 'Graisse', { 0: 'Automatique', 400: 'Normale', 500: 'Moyenne', 700: 'Grasse', 800: 'Très grasse' }, el.weight || 0)}
+      <div class="field"><span>Alignement</span><div class="segmented">${[['left', 'Gauche'], ['center', 'Centre'], ['right', 'Droite']].map(([v, l]) => `<button data-elset="align" data-v="${v}" aria-pressed="${(el.align || 'center') === v}">${l}</button>`).join('')}</div></div></div>
+    <div class="field"><span>Couleur</span>${colorRow('color', el.color || 'auto')}</div>
+    <div class="field"><span>Fond surligné</span>${colorRow('bg', el.bg || '', true)}</div>
+    ${rng('spacing', 'Espacement des lettres', el.spacing || 0, -10, 40, 1, (v) => `${v}`)}
+    ${rng('lineHeight', 'Interligne', el.lineHeight || 1.12, 0.8, 2, 0.02, (v) => (+v).toFixed(2))}
+    <div class="row" style="flex-wrap:wrap;gap:14px">${tog('upper', 'Majuscules', el.upper)}${tog('shadow', 'Ombre', el.shadow)}</div>
+    <div class="field"><span>Contour</span><div class="segmented">${[['', 'Aucun'], ['#FFFFFF', 'Blanc'], ['#111111', 'Noir']].map(([v, l]) => `<button data-elset="stroke" data-v="${v}" aria-pressed="${(el.stroke || '') === v}">${l}</button>`).join('')}</div></div>
+    ${curScene()?.props?.voice && scope === 'scene' ? `<button class="btn" data-ed="syncWords" style="justify-self:start">${ic('speaker')}Caler mot par mot sur la voix</button><p class="hint" style="color:var(--stage-muted)">Estimation à partir des pauses de la voix. Ajuste ensuite dans les pistes si besoin.</p>` : ''}`;
+  else if (el.type === 'logo') content = `${tog('plate', 'Pastille blanche derrière le logo', el.plate)}<p class="hint" style="color:var(--stage-muted)">Le logo vient de la charte du client.</p>`;
+  else if (el.type === 'image' || el.type === 'video') {
+    const ratios = { 1: 'Carré', 0.75: '4:3', 0.5625: '16:9', 1.7778: '9:16', 1.25: '4:5' };
+    content = `<button class="btn" data-ed="replaceMedia" style="justify-self:start">${ic(el.type === 'video' ? 'video' : 'image')}${el.media ? 'Remplacer' : 'Choisir'} ${el.type === 'video' ? 'la vidéo' : 'l’image'}</button>
+      <div class="field"><span>Cadrage</span><div class="segmented">${[['cover', 'Remplir'], ['contain', 'Entière']].map(([v, l]) => `<button data-elset="fit" data-v="${v}" aria-pressed="${(el.fit || 'cover') === v}">${l}</button>`).join('')}</div></div>
+      <div class="field"><span>Format du cadre</span><div class="chips">${Object.entries(ratios).map(([v, l]) => `<button class="chip ${Math.abs((el.ar || 0) - +v) < 0.01 ? 'on' : ''}" data-elset="ar" data-v="${v}" data-num="1">${l}</button>`).join('')}${el.natAr ? `<button class="chip ${Math.abs((el.ar || 0) - el.natAr) < 0.01 ? 'on' : ''}" data-elset="ar" data-v="${el.natAr}" data-num="1">Original</button>` : ''}</div></div>
+      ${rng('radius', 'Arrondi des coins', el.radius || 0, 0, 120, 2, (v) => `${v}`)}
+      ${tog('shadow', 'Ombre portée', el.shadow)}
+      ${el.type === 'video' ? `<div class="insp-sub">Clip vidéo</div>
+        ${rng('trimIn', 'Début du clip', el.trimIn || 0, 0, Math.max(0.1, (el.srcDur || 10) - 0.5), 0.1, sec)}
+        ${rng('trimOut', 'Fin du clip', el.trimOut ?? el.srcDur ?? 10, 0.5, Math.max(0.6, el.srcDur || 10), 0.1, sec)}
+        ${sel('speed', 'Vitesse', { 0.5: '×0,5 (ralenti)', 0.75: '×0,75', 1: '×1', 1.25: '×1,25', 1.5: '×1,5', 2: '×2 (accéléré)' }, el.speed || 1)}
+        ${tog('muted', 'Couper le son du clip', el.muted)}
+        ${el.muted ? '' : rng('volume', 'Volume du clip', el.volume ?? 1, 0, 1, 0.05, pct)}
+        <div class="row" style="flex-wrap:wrap"><button class="btn" data-ed="fitClip">Durée = longueur du clip</button><button class="btn" data-ed="splitClip">${ic('scissors')}Scinder à la tête de lecture</button></div>` : ''}`;
+  } else if (el.type === 'shape') content = `
+    <div class="field"><span>Forme</span><div class="chips">${Object.entries(SHAPES).map(([v, l]) => `<button class="chip ${el.kind === v ? 'on' : ''}" data-elset="kind" data-v="${v}">${l}</button>`).join('')}</div></div>
+    <div class="field"><span>Couleur</span>${colorRow('fill', el.fill || 'accent')}</div>
+    ${el.kind === 'rect' ? rng('ar', 'Hauteur', el.ar || 0.3, 0.05, 2, 0.01, (v) => (+v).toFixed(2)) + rng('radius', 'Arrondi', el.radius || 0, 0, 200, 2, (v) => `${v}`) : ''}`;
+  else if (el.type === 'avatar') content = `
+    <div class="field"><span>Personnage</span><div class="av-pick">
+      <button class="av-opt" data-ed="elAvatar" data-id="" aria-pressed="${!el.avatar}"><canvas data-av=""></canvas><span>Par défaut</span></button>
+      ${state.avatars.filter((x) => x.kind === 'illustre').map((x) => `<button class="av-opt" data-ed="elAvatar" data-id="${x.id}" aria-pressed="${el.avatar?.id === x.id}"><canvas data-av="${x.id}"></canvas><span>${esc(x.name)}</span></button>`).join('')}</div></div>
+    ${sel('frame', 'Cadre', { none: 'Aucun (détouré)', circle: 'Cercle', card: 'Carte arrondie' }, el.frame || 'none')}
+    ${sel('gesture', 'Geste', GESTURES, el.gesture || 'auto')}
+    ${sel('talk', 'Bouche', { voice: 'Suit la voix de la scène', mime: 'Mime la parole', none: 'Fermée' }, el.talk || 'voice')}
+    <p class="hint" style="color:var(--stage-muted)">Gestes disponibles : repos, salut, montrer à gauche ou à droite, et gestes automatiques pendant la parole.</p>`;
+
+  const inOpts = el.type === 'text' ? ANIM_IN : Object.fromEntries(Object.entries(ANIM_IN).filter(([k]) => !TEXT_ONLY_ANIMS.includes(k)));
+  const sfxOpts = { '': 'Aucun', ...Object.fromEntries(Object.entries(SFX).map(([k, v]) => [k, `${v.cat} : ${v.name}`])) };
+  const posBtns = [[0.15, 0.15], [0.5, 0.15], [0.85, 0.15], [0.15, 0.5], [0.5, 0.5], [0.85, 0.5], [0.15, 0.85], [0.5, 0.85], [0.85, 0.85]];
+  const isGlobalHiddenHere = scope === 'global' && (el.exclude || []).includes(curScene().id);
+  return `<div class="insp-head"><div><button class="btn ghost" data-ed="selEl" data-id="" style="height:26px;padding:0 6px;margin:-4px 0 6px -6px;font-size:12px">${ic('back')}${scope === 'global' ? 'Vidéo' : 'Scène'}</button>
+      <h2 style="display:flex;gap:8px;align-items:center">${ic(EL_ICON[el.type])}${esc(ELEMENT_TYPES[el.type])}${scope === 'global' ? ' <span class="badge-glob">global</span>' : ''}</h2></div>
+      <div class="row" style="gap:2px"><button class="icon-btn" data-ed="elDup" title="Dupliquer (Ctrl+D)" aria-label="Dupliquer">${ic('copy')}</button><button class="icon-btn" data-ed="elDel" title="Supprimer (Suppr)" aria-label="Supprimer">${ic('trash')}</button></div></div>
+    <div class="insp-sec" style="border-top:0;padding-top:0">${content}</div>
+    <div class="insp-sec"><div class="label">Position et taille</div>
+      <div class="pos-grid">${posBtns.map(([x, y]) => `<button data-ed="elPos" data-x="${x}" data-y="${y}" aria-label="Placer"></button>`).join('')}</div>
+      ${['image', 'video', 'avatar', 'shape'].includes(el.type) ? `<button class="btn" data-ed="elFull" style="justify-self:start">Plein cadre</button>` : ''}
+      ${rng('x', 'Horizontal', el.x ?? 0.5, -0.2, 1.2, 0.005, pct)}${rng('y', 'Vertical', el.y ?? 0.5, -0.2, 1.2, 0.005, pct)}
+      ${rng('w', 'Largeur', el.w || 0.3, 0.03, 1.5, 0.005, pct)}${rng('rot', 'Rotation', el.rot || 0, -180, 180, 1, (v) => `${v}°`)}${rng('opacity', 'Opacité', el.opacity ?? 1, 0, 1, 0.05, pct)}
+      <p class="hint" style="color:var(--stage-muted)">Tu peux aussi déplacer l’élément directement sur l’image et le redimensionner avec la poignée.</p></div>
+    <div class="insp-sec"><div class="label">Apparition</div>
+      ${rng('start', 'Début', el.start || 0, 0, Math.max(0.1, D - 0.1), 0.05, sec)}${rng('end', 'Fin', el.end ?? D, 0.1, D, 0.05, sec)}
+      <p class="hint" style="color:var(--stage-muted)">${scope === 'global' ? 'Temps comptés depuis le début de la vidéo.' : 'Temps comptés depuis le début de la scène.'} Glisse aussi la barre dans les pistes.</p></div>
+    <div class="insp-sec"><div class="label">Animation</div>
+      ${sel('anim.in', 'Entrée', inOpts, a.in || 'none')}
+      <div class="grid-2">${rng('anim.inDur', 'Durée', a.inDur || 0.6, 0.1, 3, 0.05, sec)}${rng('anim.inDelay', 'Délai', a.inDelay || 0, 0, 3, 0.05, sec)}</div>
+      ${sel('anim.ease', 'Courbe', EASINGS, a.ease || 'outCubic')}
+      ${sel('anim.emph', 'Pendant l’affichage', ANIM_EMPH, a.emph || 'none')}
+      ${sel('anim.out', 'Sortie', ANIM_OUT, a.out || 'none')}
+      ${a.out && a.out !== 'none' ? rng('anim.outDur', 'Durée de sortie', a.outDur || 0.4, 0.1, 3, 0.05, sec) : ''}
+      <button class="btn" data-ed="elReplay" style="justify-self:start">${ic('play')}Revoir l’animation</button></div>
+    <div class="insp-sec"><div class="label">Son à l’apparition</div>
+      <div class="row">${sel('anim.sfx', 'Effet', sfxOpts, a.sfx || '').replace('<label class="field">', '<label class="field" style="flex:1">')}<button class="icon-btn" data-ed="sfxPlay" aria-label="Écouter" title="Écouter" style="align-self:flex-end">${ic('play')}</button></div>
+      ${a.sfx ? rng('anim.sfxVol', 'Volume de l’effet', a.sfxVol ?? 0.7, 0, 1, 0.05, pct) : ''}
+      ${a.in && SFX_FOR_ANIM[a.in] && a.sfx !== SFX_FOR_ANIM[a.in] ? `<button class="btn ghost" data-ed="sfxSuggest" style="justify-self:start">${ic('speaker')}Suggestion : ${esc(SFX[SFX_FOR_ANIM[a.in]].name)}</button>` : ''}</div>
+    <div class="insp-sec"><div class="label">Portée</div>
+      ${scope === 'scene' ? `<div class="row" style="flex-wrap:wrap"><button class="btn" data-ed="elToGlobal">${ic('globe')}Afficher sur toute la vidéo</button><button class="btn" data-ed="elCopyAll">${ic('copy')}Copier dans toutes les scènes</button></div>`
+      : `<label class="switch"><input type="checkbox" data-ed-exclude ${isGlobalHiddenHere ? 'checked' : ''}>Masquer dans la scène ${ed.sel + 1}</label>
+         <button class="btn" data-ed="elToScene" style="justify-self:start">Transformer en élément de cette scène</button>
+         <p class="hint" style="color:var(--stage-muted)">Pour modifier cet élément dans une seule scène : masque-le ici, puis copie-le dans la scène avec « Dupliquer » une fois transformé.</p>`}</div>`;
+}
+
+/* ---------- Canevas : sélection, déplacement, redimensionnement ---------- */
+function canvasScale() { const c = $('#edCanvas'); return c ? c.clientWidth / c.width : 1; }
+function allHits() { return [...(ed.hits?.globals || []).map((h) => ({ ...h, scope: 'global' })), ...[...(ed.hits || [])].reverse().map((h) => ({ ...h, scope: 'scene' }))]; }
+function drawSelection() {
+  const layer = $('#selLayer'); if (!layer || !ed) return;
+  const el = selElement();
+  const h = el && (ed.selEl.scope === 'global' ? ed.hits?.globals : ed.hits)?.find((x) => x.id === el.id);
+  if (!h) { layer.innerHTML = ed.guides ? ed.guides : ''; return; }
+  const k = canvasScale();
+  layer.innerHTML = `${ed.guides || ''}<div class="sel-box ${el.locked ? 'locked' : ''}" style="left:${h.x * k}px;top:${h.y * k}px;width:${h.w * k}px;height:${h.h * k}px;transform:rotate(${h.rot}deg)">
+    ${el.locked ? '' : '<span class="sel-handle" data-handle="1"></span>'}<span class="sel-tag">${esc(elLabel(el))}</span></div>`;
+}
+function bindCanvas() {
+  const wrap = $('#canvasWrap'); if (!wrap) return;
+  let drag = null;
+  wrap.addEventListener('pointerdown', (e) => {
+    const r = wrap.getBoundingClientRect(), k = canvasScale();
+    const px = (e.clientX - r.left) / k, py = (e.clientY - r.top) / k;
+    const c = $('#edCanvas'); const W = c.width, H = c.height;
+    const cur = selElement();
+    if (e.target.dataset.handle && cur) {
+      beforeChange(); drag = { mode: 'resize', el: cur, w0: cur.w, x0: e.clientX, W, k };
+      wrap.setPointerCapture(e.pointerId); e.preventDefault(); return;
+    }
+    const hit = allHits().find((h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h);
+    if (!hit) { if (ed.selEl) selectEl(null, null); return; }
+    if (ed.selEl?.id !== hit.id) { setPlaying(false); selectEl(hit.scope, hit.id); }
+    const el = selElement(); if (!el || el.locked) return;
+    beforeChange();
+    drag = { mode: 'move', el, sx: e.clientX, sy: e.clientY, x0: el.x ?? 0.5, y0: el.y ?? 0.5, W, H, k };
+    wrap.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (drag.mode === 'move') {
+      let nx = drag.x0 + (e.clientX - drag.sx) / drag.k / drag.W, ny = drag.y0 + (e.clientY - drag.sy) / drag.k / drag.H;
+      const gx = Math.abs(nx - 0.5) < 0.012, gy = Math.abs(ny - 0.5) < 0.012;
+      if (gx) nx = 0.5; if (gy) ny = 0.5;
+      ed.guides = `${gx ? '<i class="guide v"></i>' : ''}${gy ? '<i class="guide h"></i>' : ''}`;
+      drag.el.x = Math.round(nx * 1000) / 1000; drag.el.y = Math.round(ny * 1000) / 1000;
+    } else {
+      const dw = ((e.clientX - drag.x0) / drag.k / drag.W) * 2;
+      drag.el.w = Math.max(0.03, Math.round((drag.w0 + dw) * 1000) / 1000);
+    }
+    ed.dirty = true;
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null; ed.guides = ''; ed.dirty = true;
+    changed({ clip: ed.selEl?.scope === 'scene' ? ed.sel : null, film: ed.selEl?.scope === 'global' });
+    renderInspector();
+  };
+  wrap.addEventListener('pointerup', end); wrap.addEventListener('pointercancel', end);
+  wrap.addEventListener('dblclick', () => { const el = selElement(); if (el?.type === 'text') setTimeout(() => $('#inspector textarea[data-elk="text"]')?.focus(), 30); });
+}
+
+/* ---------- Pistes de la scène ---------- */
+function renderTracks() {
+  const box = $('#tracks'); if (!box || !ed || box.hidden) return;
+  const s = curScene(); if (!s) { box.innerHTML = ''; return; }
+  const D = sceneDur(), els = s.elements || [];
+  const vo = s.props?.voice && ed.assets.voices?.[s.props.voice];
+  const ticks = []; for (let t = 0; t <= D + 1e-6; t += D > 12 ? 2 : 1) ticks.push(t);
+  box.innerHTML = `<div class="tr-head"><span class="tr-label">Scène ${ed.sel + 1}, ${sec(D)}</span><div class="tr-ruler" data-ruler>${ticks.map((t) => `<i style="left:${(t / D) * 100}%">${Math.round(t)} s</i>`).join('')}<b class="tr-ph" id="trPh"></b></div></div>
+    ${vo ? `<div class="tr-row"><span class="tr-label">${ic('speaker')}Voix</span><div class="tr-lane"><canvas class="tr-wave" id="trWave" style="left:${(V.VOICE_DELAY / D) * 100}%;width:${Math.min(100, (vo.duration / D) * 100)}%"></canvas></div></div>` : ''}
+    ${[...els].reverse().map((el) => {
+      const st = +el.start || 0, en = el.end == null ? D : Math.min(D, el.end);
+      return `<div class="tr-row ${ed.selEl?.id === el.id ? 'on' : ''}"><span class="tr-label" data-ed="selEl" data-scope="scene" data-id="${el.id}">${ic(EL_ICON[el.type])}${esc(elLabel(el))}</span>
+        <div class="tr-lane"><div class="tr-bar t-${el.type} ${el.hidden ? 'off' : ''}" data-bar="${el.id}" style="left:${(st / D) * 100}%;width:${Math.max(0.5, ((en - st) / D) * 100)}%">
+          <span class="tr-grip l" data-grip="l"></span><span class="tr-txt">${el.anim?.sfx ? '♪ ' : ''}${esc(ANIM_IN[el.anim?.in] || '')}</span><span class="tr-grip r" data-grip="r"></span></div></div></div>`;
+    }).join('')}
+    ${els.length ? '' : '<p class="hint tr-empty">Aucun élément dans cette scène. Utilise « Ajouter un élément » au-dessus de l’image.</p>'}`;
+  const wave = $('#trWave');
+  if (wave && vo) {
+    const w = wave.clientWidth || 300, h = 26; wave.width = w * 2; wave.height = h * 2;
+    const x = wave.getContext('2d'); x.fillStyle = '#8B76FF';
+    const n = vo.env.length;
+    for (let i = 0; i < w; i++) { const v = vo.env[Math.floor((i / w) * n)] || 0; const bh = Math.max(1, v * h * 1.8); x.fillRect(i * 2, h - bh, 1.4, bh * 2); }
+  }
+  updatePlayheadTracks();
+}
+function updatePlayheadTracks() {
+  const ph = $('#trPh'); if (!ph || !ed) return;
+  const it = V.timeline(projForRender()).items[ed.sel]; if (!it) return;
+  const lt = ed.time - it.start, D = sceneDur();
+  ph.style.display = lt >= 0 && lt <= D ? '' : 'none'; ph.style.left = `${(lt / D) * 100}%`;
+}
+function bindTracks() {
+  const box = $('#tracks'); if (!box) return;
+  let drag = null;
+  box.addEventListener('pointerdown', (e) => {
+    const ruler = e.target.closest('[data-ruler]');
+    if (ruler) { const r = ruler.getBoundingClientRect(); const it = V.timeline(projForRender()).items[ed.sel]; setPlaying(false); seek(it.start + clamp((e.clientX - r.left) / r.width, 0, 1) * sceneDur()); return; }
+    const bar = e.target.closest('[data-bar]'); if (!bar) return;
+    const el = (curScene().elements || []).find((x) => x.id === bar.dataset.bar); if (!el) return;
+    if (ed.selEl?.id !== el.id) selectEl('scene', el.id);
+    if (el.locked) return;
+    const lane = bar.parentElement.getBoundingClientRect(), D = sceneDur();
+    beforeChange();
+    drag = { el, mode: e.target.dataset.grip || 'move', x0: e.clientX, pps: lane.width / D, s0: +el.start || 0, e0: el.end == null ? D : Math.min(D, el.end), D };
+    box.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dt = (e.clientX - drag.x0) / drag.pps, D = drag.D, snap = (v) => { const it = V.timeline(projForRender()).items[ed.sel]; const ph = ed.time - it.start; if (Math.abs(v - ph) < 0.12) return ph; return Math.round(v * 20) / 20; };
+    if (drag.mode === 'move') { const len = drag.e0 - drag.s0; let st = clamp(snap(drag.s0 + dt), 0, D - len); drag.el.start = Math.round(st * 100) / 100; drag.el.end = drag.e0 >= D - 1e-3 && dt >= 0 ? null : Math.round((st + len) * 100) / 100; if (drag.el.end != null && drag.el.end >= D - 0.01) drag.el.end = null; }
+    else if (drag.mode === 'l') drag.el.start = Math.round(clamp(snap(drag.s0 + dt), 0, drag.e0 - 0.1) * 100) / 100;
+    else { const en = clamp(snap(drag.e0 + dt), drag.s0 + 0.1, D); drag.el.end = en >= D - 0.01 ? null : Math.round(en * 100) / 100; }
+    ed.dirty = true; renderTracks();
+  });
+  const end = () => { if (!drag) return; drag = null; changed({ clip: ed.sel }); renderInspector(); };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  box.addEventListener('click', (e) => { const b = e.target.closest('[data-ed="selEl"]'); if (b) { e.stopPropagation(); selectEl('scene', b.dataset.id); } });
+}
+
+/* ---------- Effets sonores dans l'aperçu ---------- */
+function playSfxBetween(t0, t1) {
+  if (!ed?.assets?.sfx) return;
+  for (const { el, offset } of V.allElements(projForRender())) {
+    if (el.hidden || !el.anim?.sfx) continue;
+    const at = offset + (+el.start || 0) + (+el.anim.inDelay || 0);
+    if (at >= t0 && at < t1) playBuffer(ed.assets.sfx[el.anim.sfx], el.anim.sfxVol ?? 0.7);
+  }
+}
+let sfxCtx = null;
+function playBuffer(buf, vol = 0.7) {
+  if (!buf) return;
+  sfxCtx ||= new AudioContext(); sfxCtx.resume();
+  const src = sfxCtx.createBufferSource(); src.buffer = buf; const g = sfxCtx.createGain(); g.gain.value = vol;
+  src.connect(g); g.connect(sfxCtx.destination); src.start();
+}
+
+/* ---------- Ajout d'éléments ---------- */
+const TEXT_PRESETS = {
+  titre: { label: 'Titre', make: () => ({ text: 'Votre titre', size: 110, font: 'titre', anim: { in: 'slideUp' } }) },
+  soustitre: { label: 'Sous-titre', make: () => ({ text: 'Une phrase d’accroche', size: 52, font: 'texte', weight: 500, y: 0.62, anim: { in: 'fade', inDelay: 0.3 } }) },
+  motcle: { label: 'Mot-clé', make: () => ({ text: 'MALIN', size: 120, font: 'titre', bg: 'accent', color: 'auto', w: 0.5, anim: { in: 'pop', ease: 'outBack' }, emph: 'pulse' }) },
+  mots: { label: 'Mot par mot', make: () => ({ text: 'Stop au hasard. *Place à la méthode.*', size: 96, anim: { in: 'words', inDur: 1.4 } }) },
+  machine: { label: 'Machine à écrire', make: () => ({ text: 'Tapez votre message…', size: 72, font: 'texte', anim: { in: 'typewriter', inDur: 1.6 } }) },
+  legende: { label: 'Légende', make: () => ({ text: 'Votre légende ici', size: 44, font: 'texte', weight: 600, bg: '#111111', color: '#FFFFFF', y: 0.86, w: 0.8, anim: { in: 'slideUp' } }) },
+};
+function addElementDialog(scope = 'scene') {
+  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Ajouter un élément</h2><p>${scope === 'global' ? 'Il apparaîtra sur toutes les scènes de la vidéo.' : `Dans la scène ${ed.sel + 1}. Tu pourras le déplacer, l’animer et le chronométrer.`}</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <label class="switch"><input type="checkbox" id="addGlobal" ${scope === 'global' ? 'checked' : ''}>Afficher sur toute la vidéo (élément global)</label>
+    <div class="label">Texte</div>
+    <div class="add-grid">${Object.entries(TEXT_PRESETS).map(([k, p]) => `<button class="add-tile" data-add-text="${k}">${ic('text')}<span>${p.label}</span></button>`).join('')}</div>
+    <div class="label">Médias et visuels</div>
+    <div class="add-grid">
+      <button class="add-tile" data-add="logo">${ic('logo')}<span>Logo du client</span></button>
+      <button class="add-tile" data-add="image">${ic('image')}<span>Image</span><small>PNG, JPG, WebP, SVG</small></button>
+      <button class="add-tile" data-add="video">${ic('video')}<span>Vidéo</span><small>MP4, MOV, WebM</small></button>
+      <button class="add-tile" data-add="avatar">${ic('avatars')}<span>Avatar</span></button>
+      ${['rect', 'circle', 'arrow', 'star', 'check', 'line', 'heart', 'pin'].map((k) => `<button class="add-tile" data-add-shape="${k}">${ic('shape')}<span>${SHAPES[k]}</span></button>`).join('')}
+    </div></div>`, {
+    size: 'mid',
+    onMount: (m) => m.querySelector('.dlg').addEventListener('click', async (e) => {
+      const t = e.target.closest('[data-add-text]'), a = e.target.closest('[data-add]'), sh = e.target.closest('[data-add-shape]');
+      const sc = $('#addGlobal', m).checked ? 'global' : 'scene';
+      if (t) { const p = TEXT_PRESETS[t.dataset.addText].make(); insertElement(sc, V.newElement('text', { ...p, anim: { ...V.newElement('text').anim, ...p.anim, emph: p.emph || 'none' } })); }
+      else if (sh) insertElement(sc, V.newElement('shape', { kind: sh.dataset.addShape, ar: ['rect'].includes(sh.dataset.addShape) ? 0.3 : undefined, w: ['line', 'arrow'].includes(sh.dataset.addShape) ? 0.35 : 0.14 }));
+      else if (a?.dataset.add === 'logo') insertElement(sc, V.newElement('logo'));
+      else if (a?.dataset.add === 'avatar') insertElement(sc, V.newElement('avatar', { avatar: avatarData(state.avatars.find((x) => x.kind === 'illustre')) }));
+      else if (a?.dataset.add === 'image' || a?.dataset.add === 'video') {
+        const kind = a.dataset.add; closeModal();
+        const el = await pickElementMedia(kind); if (el) insertElement(sc, el);
+      }
+    }),
+  });
+}
+function insertElement(scope, el) {
+  if (!el) return;
+  beforeChange();
+  if (scope === 'global') { el.start = 0; el.end = null; }
+  elList(scope).push(el);
+  closeModal();
+  ed.selEl = { scope, id: el.id };
+  reloadAssets().then(() => { changed({ clip: ed.sel, film: scope === 'global', inspector: true }); renderTracks(); });
+  if (!ed.playing) { const it = V.timeline(projForRender()).items[ed.sel]; if (it && scope === 'scene') seek(it.start + Math.min(sceneDur() - 0.05, (+el.start || 0) + 1.2)); }
+}
+async function pickElementMedia(kind, existing = null) {
+  const inp = document.createElement('input'); inp.type = 'file';
+  inp.accept = kind === 'video' ? 'video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm' : 'image/png,image/jpeg,image/webp,image/svg+xml';
+  const file = await new Promise((r) => { inp.onchange = () => r(inp.files[0] || null); inp.click(); });
+  if (!file) return null;
+  try {
+    if (kind === 'video') {
+      if (file.size > 58e6) { toast('Vidéo trop lourde : 58 Mo maximum. Compresse-la ou coupe-la avant import.', 'error'); return null; }
+      const url = URL.createObjectURL(file), v = document.createElement('video'); v.preload = 'metadata'; v.muted = true; v.src = url;
+      await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error('format')); setTimeout(() => rej(new Error('délai')), 15000); });
+      const ar = v.videoHeight / v.videoWidth || 0.5625, dur = v.duration || 5; URL.revokeObjectURL(url);
+      toast('Import de la vidéo…');
+      const media = await uploadMedia(file.type ? file : new Blob([file], { type: 'video/mp4' }), 'video', file.name);
+      const c = $('#edCanvas'), canvasAr = c ? c.height / c.width : 0.5625;
+      const props = { media, natAr: Math.round(ar * 10000) / 10000, ar: Math.round(ar * 10000) / 10000, srcDur: Math.round(dur * 100) / 100, trimIn: 0, trimOut: Math.round(dur * 100) / 100 };
+      if (existing) return props;
+      const full = Math.abs(ar - canvasAr) < 0.2;
+      return V.newElement('video', { ...props, w: full ? 1 : 0.6, ar: full ? canvasAr : props.ar, end: Math.min(sceneDur(), dur), anim: { ...V.newElement('video').anim, in: full ? 'none' : 'scale' } });
+    }
+    const { src, w, h } = await readImage(file);
+    const k = Math.min(1, 2200 / Math.max(w, h));
+    const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(w * k)); cv.height = Math.max(1, Math.round(h * k));
+    cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
+    let blob = await new Promise((r) => cv.toBlob(r, 'image/webp', 0.9));
+    if (!blob || blob.type !== 'image/webp') blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+    const media = await uploadMedia(blob, 'image', file.name);
+    const ar = Math.round((cv.height / cv.width) * 10000) / 10000;
+    if (existing) return { media, natAr: ar, ar };
+    return V.newElement('image', { media, ar, natAr: ar, fit: 'cover' });
+  } catch (e) { console.error(e); toast(kind === 'video' ? 'Vidéo illisible dans ce navigateur. Essaie un MP4 (H.264).' : 'Image illisible.', 'error'); return null; }
+}
+function setPath(o, path, v) { const ks = path.split('.'); let x = o; for (let i = 0; i < ks.length - 1; i++) x = x[ks[i]] ||= {}; x[ks[ks.length - 1]] = v; }
+
 /* ---------- Musique de la vidéo ---------- */
 function musicLabel() {
   const m = ed?.project?.data?.music;
@@ -1464,6 +1822,9 @@ function videoPanel() {
         <span class="swatches">${['primary', 'secondary', 'dark', 'light'].map((k) => `<i style="background:${esc(ed.brand.colors[k])}"></i>`).join('')}</span>
         <span style="flex:1;font-weight:700">${esc(c ? c.name : 'Démonstration')}</span>
         ${c ? `<button class="btn ghost" data-ed="editBrand">${ic('edit')}Modifier</button>` : `<button class="btn ghost" data-ed="newBrand">${ic('plus')}Créer</button>`}</div></div>
+    ${elementsList('global')}
+    <div class="insp-sec"><div class="label">Sound design</div><button class="btn" data-ed="autoSfx" style="justify-self:start">${ic('speaker')}Ajouter les bruitages automatiquement</button>
+      <p class="hint" style="color:var(--stage-muted)">Ajoute un son adapté à chaque élément animé qui n’en a pas encore (pop, whoosh, clic…). Tout reste modifiable.</p></div>
     ${musicSection()}
     ${textSection('video')}
     <label class="switch"><input type="checkbox" data-video="fadeIn" ${p.data.fadeIn ? 'checked' : ''}>Fondu au noir en ouverture</label>
@@ -1485,6 +1846,7 @@ function beforeChange() {
 }
 function changed({ film = false, clip = null, inspector = false, scrub = false } = {}) {
   ed.dirty = true;
+  if (ed.showTracks) setTimeout(renderTracks, 0);
   if (film) renderFilm(); else if (clip !== null) redrawClip(clip);
   if (inspector) renderInspector();
   if (scrub) renderScrub();
@@ -1567,15 +1929,24 @@ function bindEditor() {
     ed.sel = to; changed({ film: true, inspector: true });
   });
   ed.onKey = onEdKey; addEventListener('keydown', ed.onKey);
+  bindCanvas(); bindTracks();
 }
 function selectScene(i, doSeek = false) {
+  if (ed.sel !== i) ed.selEl = ed.selEl?.scope === 'global' ? ed.selEl : null;
   ed.sel = clamp(i, 0, scenesOf().length - 1);
+  setTimeout(renderTracks, 0);
   $$('.clip').forEach((c) => c.setAttribute('aria-selected', +c.dataset.i === ed.sel));
   if (ed.tab !== 'scene') ed.tab = 'scene';
   renderInspector(); renderScrub();
   if (doSeek && !ed.playing) seekScene(ed.sel);
 }
 function onEdClick(e) {
+  const setb = e.target.closest('[data-elset]');
+  if (setb) {
+    const it = selElement(); if (!it) return;
+    beforeChange(); const k = setb.dataset.elset; setPath(it, k, setb.dataset.num ? +setb.dataset.v : setb.dataset.v);
+    changed({ clip: ed.sel, inspector: true }); return;
+  }
   const b = e.target.closest('[data-ed]'); if (!b) return;
   const a = b.dataset.ed, s = curScene();
   if (a === 'play') setPlaying(!ed.playing);
@@ -1665,6 +2036,63 @@ function onEdClick(e) {
     confirmBox({ title: 'Générer la vidéo réaliste ?', text: `La photo de ${s.props.avatar?.name || 'l’avatar'} va être animée sur ${vo.duration.toFixed(1).replace('.', ',')} s de voix. Coût estimé : ${fmtUsd(cost)}, facturé par fal.ai.`, ok: `Générer pour ${fmtUsd(cost)}` })
       .then((ok) => { if (ok) startJob(s, 'videoJob', { model, imageMedia: s.props.avatar.photo, audioMedia: s.props.voice, duration: vo.duration, key: videoKey(s.props) }); });
   }
+  else if (a === 'addElement') addElementDialog(b.dataset.scope || (ed.tab === 'video' && !ed.selEl ? 'global' : ed.selEl?.scope || 'scene'));
+  else if (a === 'selEl') { if (e.target.closest('[data-ed="elHide"],[data-ed="elLock"]')) return; if (b.dataset.id) { setPlaying(false); selectEl(b.dataset.scope, b.dataset.id); const el = selElement(); const it = V.timeline(projForRender()).items[ed.sel]; if (el && it && b.dataset.scope === 'scene') seek(it.start + Math.min(sceneDur() - 0.05, (+el.start || 0) + (+el.anim?.inDelay || 0) + (+el.anim?.inDur || 0.6) + 0.1)); } else selectEl(null, null); }
+  else if (a === 'elHide' || a === 'elLock') { e.stopPropagation(); const el = elList(b.dataset.scope).find((x) => x.id === b.dataset.id); if (!el) return; beforeChange(); if (a === 'elHide') el.hidden = !el.hidden; else el.locked = !el.locked; changed({ clip: ed.sel, inspector: true }); renderTracks(); }
+  else if (a === 'elDel') { const list = elList(ed.selEl.scope), i = list.findIndex((x) => x.id === ed.selEl.id); if (i < 0) return; beforeChange(); list.splice(i, 1); ed.selEl = null; changed({ clip: ed.sel, film: true, inspector: true }); renderTracks(); toast('Élément supprimé. Ctrl+Z pour annuler.'); }
+  else if (a === 'elDup') { const el = selElement(); if (!el) return; beforeChange(); const c = structuredClone(el); c.id = V.newElement(el.type).id; c.x = Math.min(1, (c.x ?? 0.5) + 0.03); c.y = Math.min(1, (c.y ?? 0.5) + 0.03); elList(ed.selEl.scope).push(c); ed.selEl = { scope: ed.selEl.scope, id: c.id }; changed({ clip: ed.sel, inspector: true }); renderTracks(); }
+  else if (a === 'elPos') { const el = selElement(); if (!el) return; beforeChange(); el.x = +b.dataset.x; el.y = +b.dataset.y; changed({ clip: ed.sel, inspector: true }); }
+  else if (a === 'elFull') { const el = selElement(); if (!el) return; beforeChange(); const c = $('#edCanvas'); el.x = 0.5; el.y = 0.5; el.w = 1; el.rot = 0; if (el.type === 'image' || el.type === 'video' || el.type === 'shape') { el.ar = c.height / c.width; el.radius = 0; if (el.type === 'shape') el.kind = 'rect'; } if (el.type === 'avatar') { el.w = 0.75; el.y = 0.55; } changed({ clip: ed.sel, inspector: true }); }
+  else if (a === 'elReplay') { const el = selElement(); if (!el) return; const it = V.timeline(projForRender()).items[ed.sel]; const base = ed.selEl.scope === 'global' ? 0 : it.start; seek(Math.max(0, base + (+el.start || 0) - 0.05)); setPlaying(true); }
+  else if (a === 'elAvatar') { const el = selElement(); if (!el) return; beforeChange(); el.avatar = b.dataset.id ? avatarData(state.avatars.find((x) => x.id === b.dataset.id)) : null; changed({ clip: ed.sel, inspector: true }); }
+  else if (a === 'replaceMedia') { const el = selElement(); if (!el) return; pickElementMedia(el.type, el).then((props) => { if (!props || !ed) return; beforeChange(); Object.assign(el, props); reloadAssets().then(() => changed({ clip: ed.sel, inspector: true })); }); }
+  else if (a === 'fitClip') { const el = selElement(); if (!el) return; beforeChange(); const len = ((el.trimOut ?? el.srcDur ?? 5) - (el.trimIn || 0)) / (el.speed || 1); const D = scopeDur(ed.selEl.scope); el.end = Math.min(D, (+el.start || 0) + len); if (el.end >= D - 0.01) el.end = null; changed({ clip: ed.sel, inspector: true }); renderTracks(); toast(len > D - (+el.start || 0) ? 'Le clip est plus long que la scène : allonge la durée de la scène pour tout voir.' : 'Durée ajustée au clip'); }
+  else if (a === 'splitClip') {
+    const el = selElement(); if (!el || ed.selEl.scope !== 'scene') return;
+    const it = V.timeline(projForRender()).items[ed.sel], lt = ed.time - it.start, st = +el.start || 0, en = el.end == null ? sceneDur() : el.end;
+    if (lt <= st + 0.1 || lt >= en - 0.1) return toast('Place la tête de lecture au milieu du clip pour le scinder.');
+    beforeChange(); const c = structuredClone(el); c.id = V.newElement('video').id;
+    el.end = Math.round(lt * 100) / 100; c.start = el.end; c.trimIn = Math.round(((+el.trimIn || 0) + (lt - st) * (el.speed || 1)) * 100) / 100; c.anim = { ...c.anim, in: 'none', inDelay: 0 }; el.anim = { ...el.anim, out: 'none' };
+    elList('scene').push(c); ed.selEl = { scope: 'scene', id: c.id }; changed({ clip: ed.sel, inspector: true }); renderTracks(); toast('Clip scindé en deux');
+  }
+  else if (a === 'sfxPlay') { const el = selElement(); const id = el?.anim?.sfx || (el?.anim?.in && SFX_FOR_ANIM[el.anim.in]); if (id) renderSfx(id).then((buf) => playBuffer(buf, el.anim?.sfxVol ?? 0.7)); }
+  else if (a === 'sfxSuggest') { const el = selElement(); if (!el) return; beforeChange(); el.anim.sfx = SFX_FOR_ANIM[el.anim.in]; reloadAssets().then(() => { changed({ clip: ed.sel, inspector: true }); renderTracks(); renderSfx(el.anim.sfx).then((buf) => playBuffer(buf, el.anim.sfxVol ?? 0.7)); }); }
+  else if (a === 'autoSfx') {
+    beforeChange(); let n = 0;
+    for (const { el } of V.allElements(projForRender())) if (!el.anim?.sfx && el.anim?.in && SFX_FOR_ANIM[el.anim.in]) { el.anim.sfx = SFX_FOR_ANIM[el.anim.in]; el.anim.sfxVol ??= 0.6; n++; }
+    reloadAssets().then(() => { changed({ film: true, inspector: true }); renderTracks(); });
+    toast(n ? `${plural(n, 'bruitage ajouté', 'bruitages ajoutés')}. Ctrl+Z pour annuler.` : 'Tous les éléments animés ont déjà un son, ou aucun élément n’est animé.', n ? 'ok' : '');
+  }
+  else if (a === 'elToGlobal' || a === 'elCopyAll') {
+    const el = selElement(); if (!el) return; beforeChange();
+    if (a === 'elToGlobal') { const i = elList('scene').indexOf(el); elList('scene').splice(i, 1); const it = V.timeline(projForRender()).items[ed.sel]; el.start = 0; el.end = null; (P().data.globals ||= []).push(el); ed.selEl = { scope: 'global', id: el.id }; toast('L’élément apparaît maintenant sur toute la vidéo', 'ok'); }
+    else { let n = 0; scenesOf().forEach((sc, i) => { if (i === ed.sel) return; const c = structuredClone(el); c.id = V.newElement(el.type).id; (sc.elements ||= []).push(c); n++; }); toast(`Copié dans ${plural(n, 'autre scène', 'autres scènes')}`, 'ok'); }
+    changed({ film: true, inspector: true }); renderTracks();
+  }
+  else if (a === 'elToScene') { const el = selElement(); if (!el) return; beforeChange(); const g = elList('global'); g.splice(g.indexOf(el), 1); el.start = 0; el.end = null; delete el.exclude; elList('scene').push(el); ed.selEl = { scope: 'scene', id: el.id }; changed({ film: true, inspector: true }); renderTracks(); }
+  else if (a === 'syncWords') {
+    const el = selElement(), vo = ed.assets.voices?.[curScene().props.voice]; if (!el || !vo) return;
+    const words = String(el.text || '').split(/\s+/).filter(Boolean);
+    const times = V.estimateTimes(vo, words.map((w) => w.replace(/\*/g, '').length + 2));
+    beforeChange(); el.start = Math.max(0, Math.round((V.VOICE_DELAY + times[0] - 0.05) * 100) / 100);
+    el.anim = { ...el.anim, in: 'words', inDelay: 0, inDur: 0.4 }; el.wordTimes = times.map((t) => Math.round((t - times[0]) * 100) / 100);
+    changed({ clip: ed.sel, inspector: true }); renderTracks(); toast(`${plural(words.length, 'mot calé', 'mots calés')} sur la voix (estimation)`, 'ok');
+  }
+  else if (a === 'syncTitles') {
+    const s = curScene(), vo = ed.assets.voices?.[s.props.voice]; if (!vo) return;
+    const sentences = String(s.props.script || '').match(/[^.!?…]+[.!?…]*/g)?.map((x) => x.trim()).filter(Boolean) || [];
+    if (!sentences.length) return toast('Écris d’abord le texte prononcé.');
+    const times = V.estimateTimes(vo, sentences.map((x) => x.length + 4));
+    beforeChange();
+    sentences.forEach((txt, i) => {
+      const st = V.VOICE_DELAY + times[i], en = i < sentences.length - 1 ? V.VOICE_DELAY + times[i + 1] - 0.05 : Math.min(sceneDur(), V.VOICE_DELAY + vo.duration + 0.3);
+      (s.elements ||= []).push(V.newElement('text', { text: txt, font: 'titre', size: 64, w: 0.8, y: 0.82, start: Math.round(st * 100) / 100, end: Math.round(en * 100) / 100, shadow: true, anim: { ...V.newElement('text').anim, in: 'slideUp', inDur: 0.4, out: 'fade', outDur: 0.25 } }));
+    });
+    if (s.props.captions) s.props.captions = false;
+    changed({ clip: ed.sel, inspector: true }); ed.showTracks = true; $('#tracks').hidden = false; renderTracks();
+    toast(`${plural(sentences.length, 'titre synchronisé', 'titres synchronisés')} avec la voix. Ajuste-les dans les pistes.`, 'ok');
+  }
+  else if (a === 'toggleTracks') { ed.showTracks = !ed.showTracks; $('#tracks').hidden = !ed.showTracks; b.style.color = ed.showTracks ? '#fff' : ''; renderTracks(); fitCanvas(); }
   else if (a === 'music') musicDialog();
   else if (a === 'musicRemove') { beforeChange(); delete P().data.music; reloadAssets().then(() => { refreshMusicChip(); changed({ inspector: true }); }); }
   else if (a === 'pickFont') fontDialog({ role: b.dataset.role, scope: b.dataset.scope });
@@ -1681,6 +2109,24 @@ function onInspector(e) {
   if (el.dataset.ttsVoice !== undefined) { if (s) { s.props.ttsVoice = el.value; changed(); } return; }
   if (el.dataset.freeVoice !== undefined) { if (s && e.type === 'change') { s.props.freeVoice = el.value; changed(); const fv = FREE_VOICES.find((x) => x.key === el.value); const st = $('#freeStatus'); if (st && fv) st.textContent = `Voix ${fv.label}. Téléchargement unique au premier usage : ${fv.size}.`; } return; }
   if (el.dataset.freeSpeed !== undefined) { if (s) { s.props.freeSpeed = +el.value; $('#freeSpeedOut').textContent = `×${(+el.value).toFixed(2).replace('.', ',')}`; if (e.type === 'change') changed(); } return; }
+  if (el.dataset.elk !== undefined || el.dataset.edExclude !== undefined) {
+    const it = selElement(); if (!it) return;
+    if (el.dataset.edExclude !== undefined) { if (e.type !== 'change') return; beforeChange(); const ex = new Set(it.exclude || []); if (el.checked) ex.add(curScene().id); else ex.delete(curScene().id); it.exclude = [...ex]; changed(); return; }
+    const k = el.dataset.elk;
+    let v = el.type === 'checkbox' ? el.checked : el.dataset.num || el.type === 'range' ? +el.value : el.value;
+    if (k === 'end' && v >= scopeDur(ed.selEl.scope) - 0.01) v = null;
+    if (k === 'weight' || k === 'speed') v = +v;
+    if (el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'color') { if (e.type !== 'change' && el.type !== 'color') return; }
+    else if (e.type === 'change' && el.tagName !== 'TEXTAREA') { renderTracks(); return; }
+    beforeChange(); setPath(it, k, v);
+    const o = $(`[data-elout="${k}"]`); if (o) { const fmts = { size: (x) => `${x} px`, rot: (x) => `${x}°`, spacing: (x) => `${x}`, lineHeight: (x) => (+x).toFixed(2), radius: (x) => `${x}`, ar: (x) => (+x).toFixed(2) }; o.textContent = fmts[k] ? fmts[k](v) : /start|end|Dur|Delay|trim/.test(k) ? sec(v ?? scopeDur(ed.selEl.scope)) : pct(v); }
+    if (k === 'font' && FONT_LIBRARY[v]) V.loadFont(v).then(() => { if (ed) ed.dirty = true; });
+    const structural = el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'color';
+    if (k === 'anim.sfx') reloadAssets().then(() => { if (v) renderSfx(v).then((buf) => playBuffer(buf, it.anim.sfxVol ?? 0.7)); });
+    if (k.startsWith('trim') || k === 'muted' || k === 'volume' || k === 'speed') reloadAssets();
+    changed({ clip: ed.selEl.scope === 'scene' ? ed.sel : null, inspector: structural });
+    return;
+  }
   if (el.dataset.music) {
     const mu = P().data.music; if (!mu) return;
     const k = el.dataset.music;
@@ -1745,7 +2191,17 @@ function onEdKey(e) {
   if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); ed.save.flush(); return; }
   if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); exportDialog(); return; }
   if (typing) return;
-  if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); $('[data-ed="dupScene"]')?.click(); return; }
+  if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); (ed.selEl ? $('[data-ed="elDup"]') : $('[data-ed="dupScene"]'))?.click(); return; }
+  if (ed.selEl && selElement()) {
+    const it = selElement();
+    if (e.key === 'Escape') { selectEl(null, null); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); $('[data-ed="elDel"]')?.click(); return; }
+    if (e.key.startsWith('Arrow') && !it.locked) {
+      e.preventDefault(); beforeChange(); const st = e.shiftKey ? 0.02 : 0.004;
+      if (e.key === 'ArrowLeft') it.x -= st; if (e.key === 'ArrowRight') it.x += st; if (e.key === 'ArrowUp') it.y -= st; if (e.key === 'ArrowDown') it.y += st;
+      changed({ clip: ed.sel }); return;
+    }
+  }
   if (e.key === ' ') { e.preventDefault(); setPlaying(!ed.playing); }
   else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); setPlaying(false); seek(ed.time + (e.key === 'ArrowRight' ? 1 : -1) * (e.shiftKey ? 1 : 1 / 30)); }
   else if (e.key === 'Home') { seek(0); }
@@ -1864,6 +2320,7 @@ function sceneDialog() {
         b.addEventListener('click', () => {
           beforeChange();
           const s = V.newScene(b.dataset.scene); s.id = uid();
+          if (s.type === 'libre') s.elements = [V.newElement('text', { text: 'Votre titre', size: 110 })];
           const at = scenesOf().length ? ed.sel + 1 : 0;
           scenesOf().splice(at, 0, s); ed.sel = at;
           closeModal(); changed({ film: true, inspector: true }); seekScene(at);

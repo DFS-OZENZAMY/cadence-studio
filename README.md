@@ -8,6 +8,13 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
 - **33 modèles de vidéos, classés en 13 secteurs** : restauration, immobilier, beauté et bien-être, sport et coaching, e-commerce et mode, formation, santé, tech et SaaS, événementiel, artisans et BTP, finance et assurance, tourisme et hôtellerie, automobile, plus les modèles généraux.
 - **14 scènes animées** : ouverture avec logo, titre choc, chiffres clés, points forts, témoignage, image plein écran, graphique, étapes, appel à l’action, présentateur, offre et prix (prix barré, badge), avant / après (volet glissant), fiche (bien, produit, véhicule) et événement (calendrier animé).
 - **Polices et tailles réglables** pendant l’édition : 19 polices (sans-serif, serif, géométriques, impact, manuscrites), une police pour les titres et une pour le texte, tailles de 50 % à 180 %, réglables pour toute la vidéo ou scène par scène.
+- **Studio V2, éléments libres** sur toutes les scènes : textes, logo, images, vidéos importées, formes et icônes, avatars. Chacun est positionnable à la souris (guides de centrage), redimensionnable, pivotable, avec opacité, début et fin propres, 18 animations d’entrée (dont mot par mot, lettre par lettre, machine à écrire, masque, surlignage, entrée hors cadre), 10 animations de sortie, des effets d’emphase et 6 courbes (dont rebond et ressort).
+- **Éléments globaux** : un logo, un slogan ou un mot-clé ajouté une fois et affiché sur toute la vidéo, avec masquage scène par scène.
+- **Vidéos importées** (MP4, MOV, WebM) : découpage, scission, vitesse, volume ou son coupé, cadrage et coins arrondis.
+- **Pistes de scène** : chaque élément est une barre déplaçable et redimensionnable (aimantation au dixième de seconde et à la tête de lecture), avec la forme d’onde de la voix.
+- **Synchronisation texte et voix** (estimation à partir des pauses) : titres phrase par phrase, ou texte mot par mot calé sur la voix, ensuite ajustables à la main.
+- **Sound design** : 19 bruitages synthétisés, libres de droits (interface, mouvement, cinéma, technologie), attachés à l’apparition des éléments, avec suggestion automatique selon l’animation.
+- **Scène libre** : un fond vide à composer entièrement.
 - **Éditeur** : aperçu en direct, pellicule de scènes réorganisable par glisser-déposer, inspecteur, 5 transitions, annuler/rétablir, enregistrement automatique, raccourcis clavier.
 - **4 formats** : 16:9 (YouTube), 9:16 (Reels, TikTok), 1:1 et 4:5 (feeds). Un clic pour passer de l’un à l’autre.
 - **Export MP4** : de 720p à 4K, 30 ou 60 images/s, avec musique en option (fondu automatique), plusieurs formats en une fois.
@@ -69,6 +76,7 @@ public/
   engine.js                Moteur d’animation, mixage audio et encodage MP4
   avatar.js                Personnages cartoon animés et galerie
   music.js                 Bibliothèque musicale (synthétiseur intégré)
+  sfx.js                   Effets sonores synthétisés
   vendor/mp4-muxer.mjs     Multiplexeur MP4 (MIT)
 worker/index.js            API Cloudflare : accès, clients, projets, avatars, médias, IA, exports
 wrangler.jsonc             Configuration Cloudflare (Worker + D1)
