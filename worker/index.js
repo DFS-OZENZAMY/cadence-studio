@@ -19,6 +19,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS media_chunks (media_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (media_id, idx))`,
   `CREATE TABLE IF NOT EXISTS avatars (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS ai_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, status_url TEXT, response_url TEXT, result_media TEXT, result_meta TEXT, cost REAL, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS recordings (id TEXT PRIMARY KEY, title TEXT NOT NULL, drive_id TEXT, drive_url TEXT, duration REAL, size INTEGER, mime TEXT, thumb TEXT, shared INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS music (id TEXT PRIMARY KEY, name TEXT NOT NULL, media_id TEXT NOT NULL, duration REAL, size INTEGER, created_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, project_id TEXT, project_name TEXT, client_id TEXT, format TEXT, quality TEXT, duration REAL, size INTEGER, created_at INTEGER NOT NULL)`,
 ];
@@ -179,7 +180,8 @@ async function api(req, env, url) {
     let salt = await setting(db, 'auth_salt');
     if (!salt) { salt = randomHex(16); await putSetting(db, 'auth_salt', salt); }
     const configured = !!(await setting(db, 'auth_hash'));
-    return json({ configured, authed: configured && !!(await session(req, db)), salt, studio: (await setting(db, 'studio_name')) || 'Cadence', needsCode: !configured && !!env.SETUP_CODE });
+    return json({ configured, authed: configured && !!(await session(req, db)), salt, studio: (await setting(db, 'studio_name')) || 'Cadence', needsCode: !configured && !!env.SETUP_CODE,
+      google: { clientId: env.GOOGLE_CLIENT_ID || '', ...(env.DRIVE_BASE ? { base: env.DRIVE_BASE } : {}) } });
   }
   if (path === '/api/auth/setup' && m === 'POST') {
     const b = await body(req);
@@ -213,6 +215,14 @@ async function api(req, env, url) {
     const md = await readMedia(db, id);
     if (!md) return fail('Fichier introuvable', 404);
     return new Response(md.bytes, { headers: { 'content-type': md.meta.mime, 'content-length': String(md.meta.size), 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
+  }
+
+  // --- Page de partage publique d'un enregistrement (seulement s'il est partagé)
+  const pr = path.match(/^\/api\/public\/rec\/([\w-]{8,64})$/);
+  if (pr && m === 'GET') {
+    const r = await db.prepare('SELECT title, drive_id, duration, created_at, shared FROM recordings WHERE id = ?').bind(pr[1]).first();
+    if (!r || !r.shared || !r.drive_id) return fail('Cette vidéo n’est pas partagée', 404);
+    return json({ title: r.title, driveId: r.drive_id, duration: r.duration, createdAt: r.created_at, studio: (await setting(db, 'studio_name')) || 'Cadence' });
   }
 
   // --- Tout le reste exige une session
@@ -382,6 +392,35 @@ async function api(req, env, url) {
     return json(publicJob(job));
   }
 
+  // --- Enregistrements d'écran : seule la fiche est stockée, la vidéo est sur le Google Drive de la personne
+  if (path === '/api/recordings') {
+    if (m === 'GET') {
+      const { results } = await db.prepare('SELECT * FROM recordings ORDER BY created_at DESC LIMIT 300').all();
+      return json(results.map((r) => ({ id: r.id, title: r.title, driveId: r.drive_id, driveUrl: r.drive_url, duration: r.duration, size: r.size, mime: r.mime, thumb: r.thumb, shared: !!r.shared, createdAt: r.created_at })));
+    }
+    if (m === 'POST') {
+      const b = await body(req);
+      const thumb = typeof b.thumb === 'string' && b.thumb.startsWith('data:image/') && b.thumb.length < 90000 ? b.thumb : null;
+      const driveId = b.driveId ? String(b.driveId).slice(0, 128) : null;
+      if (driveId && !/^[\w-]+$/.test(driveId)) return fail('Identifiant Drive invalide');
+      const driveUrl = typeof b.driveUrl === 'string' && /^https:\/\/(drive|docs)\.google\.com\//.test(b.driveUrl) ? b.driveUrl.slice(0, 400) : null;
+      const id = uid();
+      await db.prepare('INSERT INTO recordings (id, title, drive_id, drive_url, duration, size, mime, thumb, shared, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)')
+        .bind(id, str(b.title, 160, 'Titre'), driveId, driveUrl, +b.duration || 0, +b.size || 0, String(b.mime || '').slice(0, 60), thumb, Date.now()).run();
+      return json({ id }, 201);
+    }
+  }
+  mm = path.match(/^\/api\/recordings\/([\w-]{8,64})$/);
+  if (mm) {
+    if (m === 'PATCH') {
+      const b = await body(req);
+      if (b.title != null) await db.prepare('UPDATE recordings SET title = ? WHERE id = ?').bind(str(b.title, 160, 'Titre'), mm[1]).run();
+      if (b.shared != null) await db.prepare('UPDATE recordings SET shared = ? WHERE id = ?').bind(b.shared ? 1 : 0, mm[1]).run();
+      return json({ ok: true });
+    }
+    if (m === 'DELETE') { await db.prepare('DELETE FROM recordings WHERE id = ?').bind(mm[1]).run(); return json({ ok: true }); }
+  }
+
   // --- Musiques importées
   if (path === '/api/music') {
     if (m === 'GET') {
@@ -445,6 +484,7 @@ export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (url.pathname.startsWith('/voix-piper/')) return piperVoice(req, env, url, ctx);
+    if (/^\/v\/[\w-]{8,64}$/.test(url.pathname)) return env.ASSETS.fetch(new Request(new URL('/partage', url.origin), req));
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       const origin = req.headers.get('origin');

@@ -3,6 +3,8 @@ import * as V from './engine.js';
 import { drawCharacter, SKINS, FURS, HAIR_COLORS, EYE_COLORS, OUTFIT_COLORS, OPTIONS, PRESETS, DEFAULT_CHAR, normChar, randomChar } from './avatar.js';
 const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND, DOMAINS, FONT_LIBRARY, MUSIC_TRACKS } = V;
 import { renderTrack } from './music.js';
+import * as D from './drive.js';
+import * as R from './recorder.js';
 import { SFX, SFX_FOR_ANIM, renderSfx } from './sfx.js';
 const { ELEMENT_TYPES, ANIM_IN, ANIM_OUT, ANIM_EMPH, EASINGS, SHAPES, GESTURES, TEXT_ONLY_ANIMS } = V;
 
@@ -56,6 +58,10 @@ const ICONS = {
   start: '<path d="M6 5v14M18 6l-9 6 9 6z"/>',
   avatars: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   musicnav: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+  record: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/>',
+  cloud: '<path d="M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19 10a4 4 0 0 1 0 8z"/>',
+  link: '<path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1"/><path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m14 6 4 4"/>',
   mic: '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   upload: '<path d="M12 21V9M7 14l5-5 5 5M4 4h16"/>',
   spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
@@ -285,7 +291,7 @@ async function brandAssets(brand) {
 /* =========================================================
    État global
    ========================================================= */
-const state = { studio: 'Cadence', clients: [], projects: [], avatars: [], music: [], ai: { configured: false, monthSpent: 0 }, filter: 'all', salt: '', authed: false };
+const state = { studio: 'Cadence', clients: [], projects: [], avatars: [], music: [], recordings: [], ai: { configured: false, monthSpent: 0 }, filter: 'all', salt: '', authed: false };
 const clientById = (id) => state.clients.find((c) => c.id === id);
 const brandOf = (clientId) => { const c = clientById(clientId); return c ? V.normBrand({ ...c.brand, name: c.name }) : V.normBrand(DEMO_BRAND); };
 
@@ -296,6 +302,7 @@ async function boot() {
   try {
     const s = await api('/api/auth/status');
     state.salt = s.salt; state.studio = s.studio; state.needsCode = s.needsCode;
+    D.configureDrive(s.google || {});
     if (!s.configured) return authScreen('setup');
     if (!s.authed) return authScreen('login');
     await loadAll();
@@ -356,14 +363,14 @@ function authScreen(mode, message = '') {
   });
 }
 async function loadAll() {
-  const [clients, projects, avatars, ai, music] = await Promise.all([api('/api/clients'), api('/api/projects'), api('/api/avatars'), api('/api/ai/status').catch(() => state.ai), api('/api/music').catch(() => [])]);
-  state.clients = clients; state.projects = projects; state.avatars = avatars; state.ai = ai; state.music = music;
+  const [clients, projects, avatars, ai, music, recordings] = await Promise.all([api('/api/clients'), api('/api/projects'), api('/api/avatars'), api('/api/ai/status').catch(() => state.ai), api('/api/music').catch(() => []), api('/api/recordings').catch(() => [])]);
+  state.clients = clients; state.projects = projects; state.avatars = avatars; state.ai = ai; state.music = music; state.recordings = recordings;
 }
 
 /* =========================================================
    Navigation
    ========================================================= */
-const NAV = [['projets', 'Projets', 'projects'], ['clients', 'Clients', 'clients'], ['avatars', 'Avatars', 'avatars'], ['musique', 'Musique', 'musicnav'], ['modeles', 'Modèles', 'templates'], ['exports', 'Exports', 'exports'], ['reglages', 'Réglages', 'settings']];
+const NAV = [['projets', 'Projets', 'projects'], ['clients', 'Clients', 'clients'], ['avatars', 'Avatars', 'avatars'], ['enregistrements', 'Enregistrements', 'record'], ['musique', 'Musique', 'musicnav'], ['modeles', 'Modèles', 'templates'], ['exports', 'Exports', 'exports'], ['reglages', 'Réglages', 'settings']];
 function route() {
   if (!state.authed) return;
   const h = location.hash.replace(/^#\/?/, '');
@@ -371,7 +378,7 @@ function route() {
   if (page === 'editeur' && id) return openEditor(id);
   stopEditor();
   const p = NAV.some(([k]) => k === page) ? page : 'projets';
-  const counts = { projets: state.projects.length, clients: state.clients.length, avatars: state.avatars.length, musique: state.music.length || null };
+  const counts = { projets: state.projects.length, clients: state.clients.length, avatars: state.avatars.length, musique: state.music.length || null, enregistrements: state.recordings.length || null };
   $('#root').innerHTML = `<div class="shell">
     <nav class="rail" aria-label="Navigation principale">
       <div class="wordmark">${LOGO}Cadence</div>
@@ -899,6 +906,232 @@ function photoAvatarDialog(id = null, onSaved) {
 }
 
 /* =========================================================
+   Enregistrements d'écran (façon Loom) et Google Drive
+   ========================================================= */
+function driveCard() {
+  if (!D.driveAvailable()) return `<div class="drive-card off"><span class="drive-ic">${ic('cloud')}</span><div><strong>Google Drive n’est pas encore configuré</strong><p class="muted">Sans Drive, tes enregistrements se téléchargent sur ton ordinateur. Voir Réglages pour l’activer.</p></div><a class="btn" href="#/reglages">Réglages</a></div>`;
+  if (!D.driveConnected()) return `<div class="drive-card"><span class="drive-ic">${ic('cloud')}</span><div><strong>Connecte ton Google Drive</strong><p class="muted">Tes vidéos iront dans un dossier « Cadence » de ton Drive, pas sur la plateforme. Cadence ne voit que les fichiers qu’elle crée.</p></div><button class="btn primary" data-act="driveConnect">${ic('cloud')}Connecter Google Drive</button></div>`;
+  const u = D.driveUser() || {}, q = u.quota;
+  const quota = q?.limit ? `, ${fmtBytes(+q.usage)} utilisés sur ${fmtBytes(+q.limit)}` : '';
+  return `<div class="drive-card on"><span class="drive-ic">${ic('check')}</span><div><strong>Google Drive connecté</strong><p class="muted">${esc(u.email || u.name || 'Compte Google')}${quota}. Les vidéos vont dans le dossier « Cadence ».</p></div><button class="btn ghost" data-act="driveDisconnect">Déconnecter</button></div>`;
+}
+const recShareUrl = (r) => `${location.origin}/v/${r.id}`;
+PAGES.enregistrements = () => `
+  <header class="page-head"><div><h1>Enregistrements</h1><p class="sub">Enregistre ton écran, ta caméra et ta voix, comme avec Loom, puis partage un lien. Les vidéos sont stockées sur ton Google Drive.</p></div>
+    <button class="btn rec lg" data-act="newRecording">${ic('record')}Nouvel enregistrement</button></header>
+  ${driveCard()}
+  ${state.recordings.length ? `<div class="rec-grid">${state.recordings.map((r) => `<article class="rec-card">
+      <a class="rec-thumb" ${r.driveId ? `href="${esc(r.driveUrl || D.driveViewUrl(r.driveId))}" target="_blank" rel="noopener"` : ''}>${r.thumb ? `<img src="${r.thumb}" alt="">` : `<span>${ic('record')}</span>`}<em>${fmtDur(r.duration || 0)}</em></a>
+      <div class="rec-body"><strong title="${esc(r.title)}">${esc(r.title)}</strong>
+        <span class="muted">${new Date(r.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}, ${fmtBytes(r.size || 0)}${r.driveId ? ', sur Google Drive' : ', sur ton ordinateur'}</span>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          ${r.driveId ? `<button class="btn ${r.shared ? '' : 'primary'}" data-act="recShare" data-id="${r.id}">${ic('link')}${r.shared ? 'Copier le lien' : 'Partager'}</button>
+            <a class="btn ghost" href="${esc(r.driveUrl || D.driveViewUrl(r.driveId))}" target="_blank" rel="noopener">Drive</a>` : ''}
+          ${r.shared ? `<button class="btn ghost" data-act="recUnshare" data-id="${r.id}">Arrêter le partage</button>` : ''}
+          <span class="spacer"></span>
+          <button class="icon-btn" data-act="recRename" data-id="${r.id}" aria-label="Renommer" title="Renommer">${ic('edit')}</button>
+          <button class="icon-btn" data-act="recDelete" data-id="${r.id}" aria-label="Supprimer" title="Supprimer">${ic('trash')}</button>
+        </div></div></article>`).join('')}</div>`
+    : `<div class="empty"><strong>Aucun enregistrement pour l’instant</strong><p>Clique sur « Nouvel enregistrement » : choisis ton écran, active ta caméra et ton micro, et c’est parti.</p></div>`}`;
+
+async function driveConnectFlow() {
+  try { await D.connectDrive(); toast('Google Drive connecté', 'ok'); return true; }
+  catch (e) { toast(e.message, 'error'); return false; }
+  finally { if (!ed) route(); }
+}
+
+/* ---------- Réglage puis enregistrement ---------- */
+let recCtl = null, pipWin = null;
+async function recordingDialog() {
+  if (!R.supportsRecording()) return toast('Ce navigateur ne permet pas d’enregistrer l’écran. Utilise Chrome ou Edge sur ordinateur.', 'error');
+  const devs = await R.listDevices();
+  const st = { mode: 'screencam', micId: devs.mics[0]?.deviceId || '', camId: devs.cams[0]?.deviceId || '', systemAudio: false, bubble: { pos: 'bl', size: 'm' } };
+  let camPrev = null;
+  const stopPrev = () => { camPrev?.getTracks().forEach((t) => t.stop()); camPrev = null; };
+  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Nouvel enregistrement</h2><p>Choisis ce que tu veux enregistrer. Au clic sur « Démarrer », le navigateur te demandera quel écran, quelle fenêtre ou quel onglet partager.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="segmented" id="recMode">${Object.entries(R.REC_MODES).map(([k, l]) => `<button data-mode="${k}" aria-pressed="${k === st.mode}">${l}</button>`).join('')}</div>
+    <div class="rec-setup">
+      <div class="rec-cam" id="recCamBox"><video id="recCamPrev" muted playsinline autoplay></video><span class="hint" id="recCamHint">Aperçu de la caméra</span></div>
+      <div style="display:grid;gap:12px;align-content:start">
+        <label class="field" id="camField"><span>Caméra</span><select id="recCam">${devs.cams.map((d, i) => `<option value="${esc(d.deviceId)}">${esc(d.label || `Caméra ${i + 1}`)}</option>`).join('') || '<option value="">Caméra par défaut</option>'}</select></label>
+        <label class="field"><span>Micro</span><select id="recMic">${devs.mics.map((d, i) => `<option value="${esc(d.deviceId)}">${esc(d.label || `Micro ${i + 1}`)}</option>`).join('')}<option value="none">Sans micro</option></select></label>
+        <div class="field" id="bubbleField"><span>Position de la bulle</span><div class="segmented" id="recPos">${[['bl', '↙ Bas gauche'], ['br', 'Bas droite ↘'], ['tl', '↖ Haut'], ['tr', 'Haut ↗']].map(([k, l]) => `<button data-pos="${k}" aria-pressed="${k === 'bl'}">${l}</button>`).join('')}</div></div>
+        <div class="field" id="sizeField"><span>Taille de la bulle</span><div class="segmented" id="recSize">${[['s', 'Petite'], ['m', 'Moyenne'], ['l', 'Grande']].map(([k, l]) => `<button data-size="${k}" aria-pressed="${k === 'm'}">${l}</button>`).join('')}</div></div>
+        <label class="switch"><input type="checkbox" id="recSys">Inclure le son de l’ordinateur (onglet ou écran partagé)</label>
+      </div>
+    </div>
+    <p class="hint">${D.driveConnected() ? `${ic('check')} La vidéo ira sur ton Google Drive (${esc(D.driveUser()?.email || 'connecté')}).` : D.driveAvailable() ? 'Astuce : connecte ton Google Drive pour y envoyer la vidéo en un clic à la fin.' : 'La vidéo sera téléchargée sur ton ordinateur à la fin.'}</p>
+    <p class="form-error" id="recErr"></p>
+    <div class="dlg-foot"><button class="btn" data-close>Annuler</button><button class="btn rec" id="recGo">${ic('record')}Démarrer l’enregistrement</button></div></div>`, {
+    size: 'wide',
+    onClose: stopPrev,
+    onMount: async (m) => {
+      const prev = $('#recCamPrev', m);
+      const showCam = async () => {
+        stopPrev();
+        const on = st.mode !== 'screen';
+        $('#recCamBox', m).classList.toggle('off', !on); $('#camField', m).hidden = !on;
+        $('#bubbleField', m).hidden = $('#sizeField', m).hidden = st.mode !== 'screencam';
+        if (!on) { prev.srcObject = null; $('#recCamHint', m).textContent = 'Caméra désactivée'; return; }
+        try { camPrev = await navigator.mediaDevices.getUserMedia({ video: { deviceId: st.camId ? { exact: st.camId } : undefined }, audio: false }); prev.srcObject = camPrev; $('#recCamHint', m).textContent = ''; }
+        catch { $('#recCamHint', m).textContent = 'Caméra inaccessible : autorise-la dans le navigateur.'; }
+      };
+      showCam();
+      $('#recMode', m).addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (!b) return; st.mode = b.dataset.mode; $$('#recMode button', m).forEach((x) => x.setAttribute('aria-pressed', x === b)); showCam(); });
+      $('#recPos', m).addEventListener('click', (e) => { const b = e.target.closest('[data-pos]'); if (!b) return; st.bubble.pos = b.dataset.pos; $$('#recPos button', m).forEach((x) => x.setAttribute('aria-pressed', x === b)); });
+      $('#recSize', m).addEventListener('click', (e) => { const b = e.target.closest('[data-size]'); if (!b) return; st.bubble.size = b.dataset.size; $$('#recSize button', m).forEach((x) => x.setAttribute('aria-pressed', x === b)); });
+      $('#recCam', m).addEventListener('change', (e) => { st.camId = e.target.value; showCam(); });
+      $('#recMic', m).addEventListener('change', (e) => { st.micId = e.target.value; });
+      $('#recSys', m).addEventListener('change', (e) => { st.systemAudio = e.target.checked; });
+      $('#recGo', m).addEventListener('click', async () => {
+        const go = $('#recGo', m); go.disabled = true; go.innerHTML = '<span class="spinner"></span>Choix de l’écran…';
+        stopPrev();
+        try { recCtl = await R.startSession(st); }
+        catch (e) {
+          go.disabled = false; go.innerHTML = `${ic('record')}Démarrer l’enregistrement`;
+          $('#recErr', m).textContent = e.name === 'NotAllowedError' ? 'Partage refusé. Réessaie et choisis un écran, une fenêtre ou un onglet.' : e.name === 'NotFoundError' ? 'Caméra ou micro introuvable.' : `Impossible de démarrer : ${e.message}`;
+          return;
+        }
+        closeModal(); recordingHud();
+      });
+    },
+  });
+}
+
+/* Barre de contrôle pendant l'enregistrement (+ fenêtre flottante si le navigateur le permet) */
+function recordingHud() {
+  const hud = document.createElement('div'); hud.className = 'rec-hud'; hud.id = 'recHud';
+  hud.innerHTML = `<span class="rec-dot"></span><b id="recTime">00:00</b><span class="rec-lvl"><i id="recLvl"></i></span>
+    <button class="btn" id="recPause">${ic('pause')}Pause</button><button class="btn rec" id="recStop">${ic('stop')}Terminer</button><button class="icon-btn" id="recCancel" title="Abandonner" aria-label="Abandonner">${ic('trash')}</button>
+    ${window.documentPictureInPicture ? `<button class="icon-btn" id="recPip" title="Contrôles flottants, visibles par-dessus les autres fenêtres" aria-label="Contrôles flottants">${ic('layers')}</button>` : ''}`;
+  document.body.append(hud);
+  let timer = 0;
+  const upd = () => {
+    if (!recCtl) return;
+    const t = fmtTime(recCtl.elapsed()).slice(0, 5);
+    for (const doc of [document, pipWin?.document].filter(Boolean)) {
+      const el = doc.getElementById('recTime'); if (el) el.textContent = t;
+      const lv = doc.getElementById('recLvl'); if (lv) lv.style.width = `${Math.min(100, recCtl.level() * 160)}%`;
+    }
+    timer = setTimeout(upd, 250);
+  };
+  upd();
+  const finish = async (save) => {
+    clearTimeout(timer); hud.remove(); try { pipWin?.close(); } catch { /* rien */ } pipWin = null;
+    const ctl = recCtl; recCtl = null; if (!ctl) return;
+    if (!save) { ctl.cancel(); toast('Enregistrement abandonné'); return; }
+    const res = await ctl.stop();
+    reviewDialog(res);
+  };
+  const togglePause = () => {
+    if (!recCtl) return;
+    if (recCtl.paused()) recCtl.resume(); else recCtl.pause();
+    for (const doc of [document, pipWin?.document].filter(Boolean)) { const b = doc.getElementById('recPause'); if (b) b.innerHTML = recCtl.paused() ? `${ic('play')}Reprendre` : `${ic('pause')}Pause`; doc.getElementById('recHud')?.classList.toggle('paused', recCtl.paused()); }
+  };
+  hud.querySelector('#recPause').onclick = togglePause;
+  hud.querySelector('#recStop').onclick = () => finish(true);
+  hud.querySelector('#recCancel').onclick = () => finish(false);
+  recCtl.onEnded = () => finish(true);
+  // Fenêtre flottante toujours visible (Chrome, Edge) : minuteur, pause, terminer
+  const openPip = () => {
+    if (!window.documentPictureInPicture || pipWin) return;
+    documentPictureInPicture.requestWindow({ width: 380, height: 76 }).then((w) => {
+      pipWin = w;
+      [...document.styleSheets].forEach((ss) => { try { const s = w.document.createElement('style'); s.textContent = [...ss.cssRules].map((r) => r.cssText).join('\n'); w.document.head.append(s); } catch { /* feuille externe */ } });
+      w.document.body.className = 'pip-body';
+      w.document.body.innerHTML = `<div class="rec-hud pip" id="recHud">${hud.innerHTML}</div>`;
+      w.document.getElementById('recPause').onclick = togglePause;
+      w.document.getElementById('recStop').onclick = () => finish(true);
+      w.document.getElementById('recCancel').onclick = () => finish(false);
+      w.document.getElementById('recPip')?.remove();
+      w.addEventListener('pagehide', () => { pipWin = null; });
+    }).catch(() => {});
+  };
+  hud.querySelector('#recPip')?.addEventListener('click', openPip);
+  openPip();
+}
+
+/* Après l'enregistrement : revoir, nommer, envoyer sur Drive ou télécharger */
+function reviewDialog({ blob, duration, thumb }) {
+  const url = URL.createObjectURL(blob);
+  const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+  const defTitle = `Enregistrement du ${new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })} à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+  let saved = null, ctrl = null;
+  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Ton enregistrement</h2><p>${fmtDur(duration)}, ${fmtBytes(blob.size)} (${ext.toUpperCase()}).</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="rec-review"><video src="${url}" controls playsinline></video></div>
+    <label class="field"><span>Titre</span><input id="rvTitle" value="${esc(defTitle)}" maxlength="160"></label>
+    <div id="rvProg" class="rv-prog" hidden><div class="bar"><i id="rvBar"></i></div><span id="rvTxt"></span></div>
+    <div id="rvDone"></div>
+    <div class="dlg-foot" id="rvFoot">
+      <button class="btn ghost danger" id="rvDiscard">${ic('trash')}Supprimer</button><span class="spacer"></span>
+      <button class="btn" id="rvDownload">${ic('exports')}Télécharger</button>
+      <button class="btn" id="rvToCadence" title="Importe la vidéo dans un nouveau projet (stockée sur la plateforme)">${ic('video')}Monter dans Cadence</button>
+      ${D.driveAvailable() ? `<button class="btn primary" id="rvDrive">${ic('cloud')}Enregistrer sur Google Drive</button>` : ''}
+    </div></div>`, {
+    size: 'wide',
+    onClose: () => { ctrl?.abort(); setTimeout(() => URL.revokeObjectURL(url), 30_000); if (!ed) route(); },
+    onMount: (m) => {
+      const title = () => $('#rvTitle', m).value.trim() || defTitle;
+      $('#rvDiscard', m).onclick = async () => { if (saved || await confirmBox({ title: 'Supprimer cet enregistrement ?', text: 'Il n’a été envoyé nulle part : il sera perdu.', ok: 'Supprimer', danger: true })) closeModal(); };
+      $('#rvDownload', m).onclick = async () => {
+        download(url, `${slug(title())}.${ext}`);
+        if (!saved) { const r = await api('/api/recordings', { method: 'POST', body: { title: title(), duration, size: blob.size, mime: blob.type, thumb } }); saved = { id: r.id }; await loadRecs(); }
+        toast('Téléchargement lancé', 'ok');
+      };
+      $('#rvToCadence', m).onclick = async () => {
+        if (blob.size > 58e6) return toast('Trop lourd pour la plateforme (58 Mo maximum). Envoie-la sur Drive ou télécharge-la.', 'error');
+        const b = $('#rvToCadence', m); b.disabled = true; b.innerHTML = '<span class="spinner"></span>Import…';
+        try {
+          const v = document.createElement('video'); v.src = url; await new Promise((r) => { v.onloadedmetadata = r; setTimeout(r, 4000); });
+          const ar = v.videoHeight && v.videoWidth ? v.videoHeight / v.videoWidth : 0.5625;
+          const media = await uploadMedia(blob, 'video', `${title()}.${ext}`);
+          const sc = V.newScene('libre'); sc.id = uid(); sc.duration = Math.min(60, Math.max(2, Math.round(duration * 10) / 10));
+          sc.elements = [V.newElement('video', { media, ar, natAr: ar, w: 1, srcDur: duration, trimIn: 0, trimOut: duration, anim: { ...V.newElement('video').anim, in: 'none' } })];
+          const p = await api('/api/projects', { method: 'POST', body: { name: title(), clientId: null, data: { format: '16:9', scenes: [sc] } } });
+          closeModal(); await loadAll(); openEditor(p.id);
+          toast('Projet créé avec ton enregistrement', 'ok');
+        } catch (e) { toast(e.message, 'error'); b.disabled = false; b.innerHTML = `${ic('video')}Monter dans Cadence`; }
+      };
+      const dBtn = $('#rvDrive', m);
+      if (dBtn) dBtn.onclick = async () => {
+        if (!D.driveConnected()) { try { await D.connectDrive(); } catch (e) { return toast(e.message, 'error'); } }
+        dBtn.disabled = true; dBtn.innerHTML = '<span class="spinner"></span>Envoi…';
+        $('#rvProg', m).hidden = false; ctrl = new AbortController();
+        try {
+          const f = await D.uploadToDrive(blob, `${title()}.${ext}`, { signal: ctrl.signal, onProgress: (p) => { $('#rvBar', m).style.width = `${Math.round(p * 100)}%`; $('#rvTxt', m).textContent = `Envoi vers Google Drive, ${Math.round(p * 100)} %`; } });
+          const body = { title: title(), duration, size: blob.size, mime: blob.type, thumb, driveId: f.id, driveUrl: f.webViewLink || D.driveViewUrl(f.id) };
+          if (saved) await api(`/api/recordings/${saved.id}`, { method: 'DELETE' });
+          const r = await api('/api/recordings', { method: 'POST', body }); saved = { id: r.id, driveId: f.id };
+          await loadRecs();
+          $('#rvTxt', m).textContent = 'Enregistrée sur ton Google Drive, dossier « Cadence ».';
+          $('#rvDone', m).innerHTML = `<div class="rv-share"><b>${ic('check')}Vidéo sur Google Drive</b><span class="spacer"></span><a class="btn ghost" href="${esc(body.driveUrl)}" target="_blank" rel="noopener">Ouvrir dans Drive</a><button class="btn primary" id="rvShare">${ic('link')}Copier le lien de partage</button></div>`;
+          $('#rvShare', m).onclick = () => shareRecording(saved.id);
+          dBtn.remove(); toast('Vidéo enregistrée sur Google Drive', 'ok');
+        } catch (e) {
+          if (e.name === 'AbortError') return;
+          dBtn.disabled = false; dBtn.innerHTML = `${ic('cloud')}Réessayer l’envoi`; $('#rvTxt', m).textContent = e.message; toast(e.message, 'error');
+        }
+      };
+    },
+  });
+}
+async function loadRecs() { state.recordings = await api('/api/recordings').catch(() => state.recordings); }
+async function shareRecording(id) {
+  const r = state.recordings.find((x) => x.id === id); if (!r?.driveId) return;
+  try {
+    if (!r.shared) {
+      if (!D.driveConnected()) await D.connectDrive();
+      await D.shareDriveFile(r.driveId);
+      await api(`/api/recordings/${id}`, { method: 'PATCH', body: { shared: true } }); await loadRecs();
+    }
+    const link = recShareUrl(r);
+    await navigator.clipboard.writeText(link).catch(() => {});
+    toast(`Lien copié : ${link}`, 'ok');
+  } catch (e) { toast(e.message, 'error'); }
+  if (!ed && !modal.open) route();
+}
+
+/* =========================================================
    Musique : écoute, import, page
    ========================================================= */
 const listen = { ctx: null, src: null, el: null, key: null, btn: null };
@@ -1009,6 +1242,14 @@ AFTER.exports = async () => {
    ========================================================= */
 PAGES.reglages = () => `<header class="page-head"><div><h1>Réglages</h1><p class="sub">Ton studio, ton accès et la compatibilité de ce navigateur.</p></div></header>
   <div style="display:grid;gap:18px;max-width:760px">
+    <section class="panel" style="display:grid;gap:12px"><h2>Google Drive</h2>
+      ${D.driveAvailable() ? `${driveCard()}<p class="hint">Chaque personne connecte son propre compte Google dans son navigateur. Ses enregistrements et ses exports vont sur son Drive, dans un dossier « Cadence ». La plateforme ne garde qu’une fiche (titre, durée, lien).</p>`
+        : `<p>Pour que les vidéos aillent sur le Google Drive de chaque personne plutôt que sur la plateforme, il faut un identifiant client Google (gratuit, environ 10 minutes) :</p>
+        <ol class="steps-list"><li>Sur <b>console.cloud.google.com</b>, crée un projet, puis active <b>Google Drive API</b>.</li>
+          <li>Dans <b>Écran de consentement OAuth</b> : type « Externe », ajoute l’autorisation <code>drive.file</code>, puis publie l’application (ou ajoute les comptes testeurs).</li>
+          <li>Dans <b>Identifiants</b>, crée un <b>ID client OAuth</b> de type « Application Web », avec comme origine JavaScript autorisée : <code>${esc(location.origin)}</code></li>
+          <li>Dans Cloudflare, ajoute la variable <code>GOOGLE_CLIENT_ID</code> au Worker avec cet identifiant, puis redéploie.</li></ol>`}
+    </section>
     <form class="panel" data-local id="studioForm" style="display:grid;gap:14px"><h2>Studio</h2>
       <div class="row" style="align-items:flex-end"><label class="field" style="flex:1"><span>Nom du studio</span><input name="studio" value="${esc(state.studio)}" maxlength="60"></label><button class="btn">Enregistrer</button></div></form>
     <form class="panel" data-local id="pwForm" style="display:grid;gap:14px"><h2>Mot de passe</h2>
@@ -1063,6 +1304,27 @@ const ACT = {
   newClient: () => brandDialog(),
   editClient: (el) => brandDialog(el.dataset.id),
   useTpl: (el) => newVideoDialog(el.dataset.tpl),
+  newRecording: () => recordingDialog(),
+  driveConnect: () => driveConnectFlow(),
+  driveDisconnect: () => { D.disconnectDrive(); toast('Google Drive déconnecté de ce navigateur'); route(); },
+  recShare: (el) => shareRecording(el.dataset.id),
+  recUnshare: async (el) => {
+    const r = state.recordings.find((x) => x.id === el.dataset.id); if (!r) return;
+    try { if (!D.driveConnected()) await D.connectDrive(); await D.unshareDriveFile(r.driveId); } catch (e) { toast(e.message, 'error'); return; }
+    await api(`/api/recordings/${r.id}`, { method: 'PATCH', body: { shared: false } }); await loadRecs(); route(); toast('Partage arrêté : le lien ne fonctionne plus');
+  },
+  recRename: async (el) => {
+    const r = state.recordings.find((x) => x.id === el.dataset.id); if (!r) return;
+    const t = prompt('Nouveau titre', r.title); if (!t || !t.trim()) return;
+    await api(`/api/recordings/${r.id}`, { method: 'PATCH', body: { title: t.trim() } }); await loadRecs(); route();
+  },
+  recDelete: async (el) => {
+    const r = state.recordings.find((x) => x.id === el.dataset.id); if (!r) return;
+    const alsoDrive = !!r.driveId;
+    if (!(await confirmBox({ title: `Supprimer « ${r.title} » ?`, text: alsoDrive ? 'La vidéo sera aussi supprimée de ton Google Drive (corbeille comprise), et le lien de partage ne fonctionnera plus.' : 'La fiche sera retirée de la liste. Le fichier téléchargé reste sur ton ordinateur.', ok: 'Supprimer', danger: true }))) return;
+    if (alsoDrive) { try { if (!D.driveConnected()) await D.connectDrive(); await D.deleteDriveFile(r.driveId); } catch (e) { if (!/404|not found/i.test(e.message)) { toast(e.message, 'error'); return; } } }
+    await api(`/api/recordings/${r.id}`, { method: 'DELETE' }); await loadRecs(); route(); toast('Enregistrement supprimé');
+  },
   importMusic: async () => { const f = await pickAudioFile(); if (!f) return; try { await importMusic(f); } catch (e) { toast(e.message, 'error'); } if (!ed) route(); },
   delMusic: async (el) => {
     const mu = state.music.find((x) => x.id === el.dataset.id); if (!mu) return;
@@ -2889,7 +3151,7 @@ async function runExport({ formats, quality, fps, music, volume }) {
       results.push({ fmt, url, name, size: res.blob.size, codec: res.codec });
       download(url, name);
       api('/api/exports', { method: 'POST', body: { projectId: p.id, projectName: p.name, clientId: p.clientId, format: fmt, quality, duration: res.duration, size: res.blob.size } }).catch(() => {});
-      $('#exResults').insertAdjacentHTML('beforeend', `<div class="result"><span style="color:var(--ok)">${ic('check')}</span><div class="grow"><b>${esc(fmt)}</b> <span class="hint">${esc(name)}, ${fmtBytes(res.blob.size)}${res.codec !== 'avc' ? `, codec ${res.codec.toUpperCase()}` : ''}</span></div><a class="btn" href="${url}" download="${esc(name)}">${ic('exports')}Télécharger</a></div>`);
+      $('#exResults').insertAdjacentHTML('beforeend', `<div class="result"><span style="color:var(--ok)">${ic('check')}</span><div class="grow"><b>${esc(fmt)}</b> <span class="hint">${esc(name)}, ${fmtBytes(res.blob.size)}${res.codec !== 'avc' ? `, codec ${res.codec.toUpperCase()}` : ''}</span></div><a class="btn" href="${url}" download="${esc(name)}">${ic('exports')}Télécharger</a>${D.driveAvailable() ? `<button class="btn" data-drive-up="${results.length - 1}">${ic('cloud')}Sur Google Drive</button>` : ''}</div>`);
     }
     delete modal.dataset.locked;
     $('#exTitle').innerHTML = `${ic('check')} Vidéo${results.length > 1 ? 's' : ''} prête${results.length > 1 ? 's' : ''}`;
@@ -2898,6 +3160,18 @@ async function runExport({ formats, quality, fps, music, volume }) {
     const last = results[results.length - 1];
     $('#exPrev').innerHTML = `<video src="${last.url}" controls autoplay muted playsinline></video>`;
     $('#exFoot').innerHTML = '<button class="btn primary" data-close>Terminé</button>';
+    $('#exResults').addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-drive-up]'); if (!b) return;
+      const r = results[+b.dataset.driveUp]; if (!r) return;
+      try {
+        if (!D.driveConnected()) await D.connectDrive();
+        b.disabled = true;
+        const blob = await (await fetch(r.url)).blob();
+        const f = await D.uploadToDrive(blob, r.name, { onProgress: (p) => { b.innerHTML = `<span class="spinner"></span>${Math.round(p * 100)} %`; } });
+        b.outerHTML = `<a class="btn" href="${esc(f.webViewLink || D.driveViewUrl(f.id))}" target="_blank" rel="noopener">${ic('check')}Ouvrir dans Drive</a>`;
+        toast('Vidéo enregistrée sur ton Google Drive', 'ok');
+      } catch (err) { b.disabled = false; b.innerHTML = `${ic('cloud')}Sur Google Drive`; toast(err.message, 'error'); }
+    });
     toast(results.length > 1 ? `${results.length} vidéos exportées` : 'Vidéo exportée', 'ok');
     modal._onClose = () => setTimeout(() => results.forEach((r) => URL.revokeObjectURL(r.url)), 60_000);
   } catch (err) {

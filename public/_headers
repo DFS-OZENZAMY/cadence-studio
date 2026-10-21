@@ -3,7 +3,7 @@
   Referrer-Policy: no-referrer
   X-Frame-Options: DENY
   Strict-Transport-Security: max-age=31536000
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' data: blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://lh3.googleusercontent.com; media-src 'self' blob:; connect-src 'self' data: blob: https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com; worker-src 'self' blob:; frame-src https://accounts.google.com https://drive.google.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'
 
 /index.html
   Cache-Control: no-cache
