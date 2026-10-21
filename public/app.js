@@ -948,7 +948,7 @@ async function recordingDialog() {
   const st = { mode: 'screencam', micId: devs.mics[0]?.deviceId || '', camId: devs.cams[0]?.deviceId || '', systemAudio: false, bubble: { pos: 'bl', size: 'm' } };
   let camPrev = null;
   const stopPrev = () => { camPrev?.getTracks().forEach((t) => t.stop()); camPrev = null; };
-  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Nouvel enregistrement</h2><p>Choisis ce que tu veux enregistrer. Au clic sur « Démarrer », le navigateur te demandera quel écran, quelle fenêtre ou quel onglet partager.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+  openModal(`<div class="dlg"><div class="dlg-head"><div><h2>Nouvel enregistrement</h2><p>Au clic sur « Démarrer », choisis la <b>fenêtre</b> ou l’<b>onglet</b> à enregistrer. Pendant l’enregistrement, ta bulle et une mini-barre de contrôle flottent à l’écran ; seule la bulle apparaîtra dans la vidéo.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
     <div class="segmented" id="recMode">${Object.entries(R.REC_MODES).map(([k, l]) => `<button data-mode="${k}" aria-pressed="${k === st.mode}">${l}</button>`).join('')}</div>
     <div class="rec-setup">
       <div class="rec-cam" id="recCamBox"><video id="recCamPrev" muted playsinline autoplay></video><span class="hint" id="recCamHint">Aperçu de la caméra</span></div>
@@ -989,7 +989,7 @@ async function recordingDialog() {
         try { recCtl = await R.startSession(st); }
         catch (e) {
           go.disabled = false; go.innerHTML = `${ic('record')}Démarrer l’enregistrement`;
-          $('#recErr', m).textContent = e.name === 'NotAllowedError' ? 'Partage refusé. Réessaie et choisis un écran, une fenêtre ou un onglet.' : e.name === 'NotFoundError' ? 'Caméra ou micro introuvable.' : `Impossible de démarrer : ${e.message}`;
+          $('#recErr', m).textContent = e.name === 'SelfCapture' ? 'Tu as choisi l’onglet Cadence : choisis plutôt la fenêtre ou l’onglet que tu veux montrer (ta présentation, ton site…).' : e.name === 'MonitorNotAllowed' ? 'Choisis une fenêtre ou un onglet plutôt que l’écran entier : sinon la barre de contrôle apparaîtrait dans la vidéo.' : e.name === 'NotAllowedError' ? 'Partage refusé. Réessaie et choisis une fenêtre ou un onglet.' : e.name === 'NotFoundError' ? 'Caméra ou micro introuvable.' : `Impossible de démarrer : ${e.message}`;
           return;
         }
         closeModal(); recordingHud();
@@ -1026,7 +1026,7 @@ function recordingHud() {
   const togglePause = () => {
     if (!recCtl) return;
     if (recCtl.paused()) recCtl.resume(); else recCtl.pause();
-    for (const doc of [document, pipWin?.document].filter(Boolean)) { const b = doc.getElementById('recPause'); if (b) b.innerHTML = recCtl.paused() ? `${ic('play')}Reprendre` : `${ic('pause')}Pause`; doc.getElementById('recHud')?.classList.toggle('paused', recCtl.paused()); }
+    for (const doc of [document, pipWin?.document].filter(Boolean)) { const b = doc.getElementById('recPause'); if (b) b.innerHTML = b.classList.contains('pbtn') ? ic(recCtl.paused() ? 'play' : 'pause') : recCtl.paused() ? `${ic('play')}Reprendre` : `${ic('pause')}Pause`; doc.getElementById('recHud')?.classList.toggle('paused', recCtl.paused()); }
   };
   hud.querySelector('#recPause').onclick = togglePause;
   hud.querySelector('#recStop').onclick = () => finish(true);
@@ -1036,11 +1036,15 @@ function recordingHud() {
   const openPip = () => {
     if (!window.documentPictureInPicture || pipWin) return;
     const hasCam = !!recCtl?.camStream;
-    documentPictureInPicture.requestWindow({ width: 340, height: hasCam ? 396 : 84 }).then((w) => {
+    documentPictureInPicture.requestWindow({ width: hasCam ? 236 : 250, height: hasCam ? 292 : 64 }).then((w) => {
       pipWin = w;
       [...document.styleSheets].forEach((ss) => { try { const s = w.document.createElement('style'); s.textContent = [...ss.cssRules].map((r) => r.cssText).join('\n'); w.document.head.append(s); } catch { /* feuille externe */ } });
-      w.document.body.className = `pip-body${hasCam ? ' with-cam' : ''}`;
-      w.document.body.innerHTML = `${hasCam ? '<div class="pip-cam"><video id="pipCam" muted playsinline autoplay></video></div>' : ''}<div class="rec-hud pip" id="recHud">${hud.innerHTML}</div>`;
+      w.document.body.className = 'pip-body';
+      w.document.body.innerHTML = `<div class="pip-wrap">${hasCam ? '<div class="pip-cam"><video id="pipCam" muted playsinline autoplay></video></div>' : ''}
+        <div class="pip-bar" id="recHud"><span class="rec-dot"></span><b id="recTime">00:00</b>
+          <button class="pbtn" id="recPause" title="Pause" aria-label="Pause">${ic('pause')}</button>
+          <button class="pbtn stop" id="recStop" title="Terminer" aria-label="Terminer">${ic('stop')}</button>
+          <button class="pbtn" id="recCancel" title="Abandonner" aria-label="Abandonner">${ic('trash')}</button></div></div>`;
       const pv = w.document.getElementById('pipCam');
       if (pv && recCtl?.camStream) { pv.srcObject = recCtl.camStream; pv.play().catch(() => {}); }
       w.document.getElementById('recPause').onclick = togglePause;
@@ -1057,7 +1061,6 @@ function recordingHud() {
     const f = document.createElement('video'); f.className = 'rec-cam-float'; f.id = 'recCamFloat'; f.muted = true; f.playsInline = true; f.autoplay = true; f.srcObject = recCtl.camStream;
     document.body.append(f); f.play().catch(() => {});
   }
-  if (recCtl?.surface === 'monitor' && recCtl.camStream && window.documentPictureInPicture) toast('Tu partages tout l’écran : la fenêtre flottante peut apparaître dans la vidéo. Partage plutôt une fenêtre ou un onglet pour n’avoir que la bulle ronde.');
 }
 
 /* Après l'enregistrement : revoir, nommer, envoyer sur Drive ou télécharger */

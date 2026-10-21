@@ -16,6 +16,9 @@ export async function listDevices() {
   } catch { return { mics: [], cams: [] }; }
 }
 export const supportsRecording = () => !!(navigator.mediaDevices?.getDisplayMedia && window.MediaRecorder);
+// Cadence se signale au navigateur : on reconnaît ainsi si l'onglet partagé est Cadence lui-même
+const SELF_HANDLE = `cadence-${Math.random().toString(36).slice(2)}`;
+try { navigator.mediaDevices?.setCaptureHandleConfig?.({ handle: SELF_HANDLE, exposeOrigin: true, permittedOrigins: [location.origin] }); } catch { /* navigateur sans cette fonction */ }
 
 function tickWorker(fps) {
   const src = `let t=null;onmessage=(e)=>{clearInterval(t);if(e.data>0)t=setInterval(()=>postMessage(0),1000/e.data)}`;
@@ -36,8 +39,12 @@ export async function startSession(opts) {
   let screen = null, cam = null, mic = null;
   try {
     if (wantScreen) {
-      screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: !!opts.systemAudio, selfBrowserSurface: 'include', surfaceSwitching: 'include', systemAudio: opts.systemAudio ? 'include' : 'exclude' });
+      // Fenêtre ou onglet seulement : la bulle et la barre de contrôle à l'écran ne sont ainsi jamais filmées
+      screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30, displaySurface: 'window' }, audio: !!opts.systemAudio, monitorTypeSurfaces: 'exclude', selfBrowserSurface: 'exclude', surfaceSwitching: 'include', systemAudio: opts.systemAudio ? 'include' : 'exclude' });
       tracks.push(...screen.getTracks());
+      const vt = screen.getVideoTracks()[0];
+      if (vt?.getSettings?.().displaySurface === 'monitor') { const err = new Error('écran entier'); err.name = 'MonitorNotAllowed'; throw err; }
+      if (vt?.getCaptureHandle?.()?.handle === SELF_HANDLE) { const err = new Error('onglet Cadence'); err.name = 'SelfCapture'; throw err; }
     }
     if (wantCam) { cam = await navigator.mediaDevices.getUserMedia({ video: { deviceId: opts.camId ? { exact: opts.camId } : undefined, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); tracks.push(...cam.getTracks()); }
     if (opts.micId !== 'none') { mic = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: opts.micId ? { exact: opts.micId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); tracks.push(...mic.getTracks()); }

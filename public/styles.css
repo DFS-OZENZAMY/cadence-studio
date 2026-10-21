@@ -648,3 +648,15 @@ dialog[open] { animation: pop .18s ease-out; }
 .rec-hud .btn:not(.rec) { background: #2A2A35; color: #fff; border: 1px solid #3a3a46; }
 .rec-hud .btn:not(.rec):hover { background: #34344a; }
 .rec-hud .icon-btn { color: #cfcfda; }
+
+/* Fenêtre flottante compacte : bulle ronde + mini-barre */
+.pip-wrap { display: grid; justify-items: center; align-content: center; gap: 10px; height: 100vh; padding: 10px; box-sizing: border-box; }
+.pip-wrap .pip-cam { width: min(196px, calc(100vh - 76px)); }
+.pip-bar { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 10px; border-radius: 999px; background: #22222B; border: 1px solid #33333f; color: #fff; }
+.pip-bar b { font: 700 13px/1 ui-monospace, Consolas, monospace; min-width: 42px; }
+.pip-bar .rec-dot { width: 9px; height: 9px; }
+.pbtn { width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; background: #33333f; color: #fff; cursor: pointer; padding: 0; }
+.pbtn:hover { background: #44445a; }
+.pbtn.stop { background: #E5484D; }
+.pbtn .ic { width: 15px; height: 15px; }
+.pip-bar.paused .rec-dot { animation: none; background: #F2B54A; }
