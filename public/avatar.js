@@ -117,13 +117,56 @@ export function synthTalk(t) {
 /* ---------------------------------------------------------------
    Dessin du personnage
    --------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------
+   Gestes : deux bras articulés, formes de main, expressions
+   Angles en degrés : 90 = bras le long du corps, 0 = à l'horizontale vers l'extérieur, -90 = vers le haut.
+   --------------------------------------------------------------- */
+export const GESTURE_LIST = {
+  wave: 'Salue', thumbsUp: 'Pouce levé', nod: 'Acquiesce', shake: 'Fait non', think: 'Réfléchit',
+  celebrate: 'Célèbre', shrug: 'Hausse les épaules', explain: 'Explique', welcome: 'Présente « voici »', clap: 'Applaudit',
+  surprised: 'Surpris', pointUp: 'Montre en haut', pointLeft: 'Montre à gauche', pointRight: 'Montre à droite',
+};
+export const POSE_DUR = { wave: 1.8, thumbsUp: 1.6, nod: 1.3, shake: 1.3, think: 2.2, celebrate: 1.9, shrug: 1.6, explain: 2.2, welcome: 1.8, clap: 1.6, surprised: 1.4, pointUp: 1.8, pointLeft: 1.8, pointRight: 1.8 };
+const REST = { a1: 96, a2: 92, hand: 'fist' };
+function poseOf(name, pt) {
+  const S = Math.sin;
+  switch (name) {
+    case 'wave': return { main: { a1: 38, a2: -72 + 20 * S(pt * 9), hand: 'open' }, mouth: 'smile', brow: 6 };
+    case 'thumbsUp': return { main: { a1: 72, a2: -48, hand: 'thumb' }, mouth: 'smile', eyes: 'happy', nod: 4 * S(pt * 6) };
+    case 'nod': return { nod: 11 * Math.max(0, S(pt * 7.5)), tilt: 0.02, mouth: 'smile' };
+    case 'shake': return { tilt: 0.1 * S(pt * 10), brow: -4 };
+    case 'think': return { main: { a1: 157, a2: -93, hand: 'fist' }, tilt: 0.11, look: -3, lookY: -8, brow: 8, browTilt: 1 };
+    case 'celebrate': return { main: { a1: -58, a2: -84 + 9 * S(pt * 8), hand: 'fist' }, other: { a1: -58, a2: -84 + 9 * S(pt * 8 + 1.6), hand: 'fist' }, eyes: 'happy', mouth: 'open', jump: Math.abs(S(pt * 6)) * 22, brow: 10 };
+    case 'shrug': return { main: { a1: 62, a2: -12, hand: 'open' }, other: { a1: 62, a2: -12, hand: 'open' }, lift: 18 * Math.min(1, pt * 3), brow: 14, tilt: 0.08, mouth: 'flat' };
+    case 'explain': return { main: { a1: 84, a2: -30 + 16 * S(pt * 3.2), hand: 'open' }, other: { a1: 84, a2: -30 + 16 * S(pt * 3.2 + 2.2), hand: 'open' }, brow: 4 };
+    case 'welcome': return { main: { a1: 18, a2: 6, hand: 'open' }, mouth: 'smile', tilt: 0.05 };
+    case 'clap': return { main: { a1: 116, a2: -134 + 11 * S(pt * 15), hand: 'open' }, other: { a1: 116, a2: -134 + 11 * S(pt * 15), hand: 'open' }, eyes: 'happy', mouth: 'smile' };
+    case 'surprised': return { main: { a1: 136, a2: -66, hand: 'open' }, other: { a1: 136, a2: -66, hand: 'open' }, mouth: 'o', brow: 20 };
+    case 'pointUp': return { main: { a1: -48, a2: -96, hand: 'point' }, look: 3, lookY: -10, brow: 6 };
+    case 'pointRight': return { right: { a1: 4, a2: -6, hand: 'point' }, look: 6, tiltAbs: 0.05 };
+    case 'pointLeft': return { left: { a1: 4, a2: -6, hand: 'point' }, look: -6, tiltAbs: -0.05 };
+    default: return null;
+  }
+}
+function drawHand(ctx, hx, hy, ang, kind, color, outline, OL, paint) {
+  const r = 46;
+  paint(circ(hx, hy, r), color, 7);
+  const finger = (len, rot, w = 26) => { ctx.save(); ctx.translate(hx, hy); ctx.rotate(rot); const p = rr(r * 0.55, -w / 2, len, w, w / 2); paint(p, color, 6); ctx.restore(); };
+  if (kind === 'point') finger(78, ang);
+  else if (kind === 'thumb') { ctx.save(); ctx.translate(hx, hy); const p = rr(-14, -r - 52, 28, 70, 14); paint(p, color, 6); ctx.restore(); }
+  else if (kind === 'open') { for (const k of [-0.5, -0.17, 0.17, 0.5]) finger(52, ang + k, 22); }
+}
+
 /**
  * @param ctx contexte 2D ; c configuration ; x,y bas du buste (px) ; s pixels par unité
  * @param a animation { t, talk 0..1, gesture 0..1, dir ±1, outfit (couleur client), accent }
  */
 export function drawCharacter(ctx, c, x, y, s, a) {
   const cfg = normChar(c);
-  const t = a.t || 0, talk = clamp(a.talk || 0), dir = a.dir || 1, g = clamp(a.gesture || 0);
+  const t = a.t || 0, talk = clamp(a.talk || 0), dir = a.dir || 1;
+  const pw = a.pose ? clamp(a.pw ?? 1) : 0, P = pw > 0 ? (poseOf(a.pose, a.pt || 0) || {}) : {};
+  const g = pw > 0 ? 0 : clamp(a.gesture || 0);
   const human = cfg.species === 'humain', robot = cfg.species === 'robot';
   const chibi = cfg.style === 'mascotte', outline = cfg.style === 'contour';
   const OL = '#1E1B24';
@@ -134,16 +177,16 @@ export function drawCharacter(ctx, c, x, y, s, a) {
   const shoulderY = -322 * ty;
   const headY = shoulderY - (chibi ? 55 : 70) - 168 * hs;
   const breathe = Math.sin(t * 2.2) * 5;
-  const bob = Math.sin(t * 1.3) * 4 - talk * 5 + Math.sin(t * 8.5) * talk * 2.5;
-  const tilt = Math.sin(t * 0.65) * 0.035 + Math.sin(t * 6.3) * talk * 0.018 + dir * 0.015 * g;
+  const bob = Math.sin(t * 1.3) * 4 - talk * 5 + Math.sin(t * 8.5) * talk * 2.5 + pw * ((P.nod || 0) - (P.lift || 0) * 0.5);
+  const tilt = Math.sin(t * 0.65) * 0.035 + Math.sin(t * 6.3) * talk * 0.018 + dir * 0.015 * g + pw * (dir * (P.tilt || 0) + (P.tiltAbs || 0));
   const cyc = (t + 0.7) % 3.9;
   const blink = cyc < 0.13 || (cyc > 0.32 && cyc < 0.42 && Math.floor((t + 0.7) / 3.9) % 3 === 1);
-  const raise = talk * 9 + Math.max(0, Math.sin(t * 1.7)) * 3;
+  const raise = talk * 9 + Math.max(0, Math.sin(t * 1.7)) * 3 + pw * (P.brow || 0);
 
   const paint = (p, color, lw = 8) => { ctx.fillStyle = color; ctx.fill(p); if (outline) { ctx.strokeStyle = OL; ctx.lineWidth = lw; ctx.stroke(p); } };
 
   ctx.save();
-  ctx.translate(x, y); ctx.scale(s, s);
+  ctx.translate(x, y - pw * (P.jump || 0) * s); ctx.scale(s, s);
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
   const head = (fn) => { ctx.save(); ctx.translate(0, headY + bob); ctx.rotate(tilt); ctx.scale(hs, hs); fn(); ctx.restore(); };
@@ -234,7 +277,8 @@ export function drawCharacter(ctx, c, x, y, s, a) {
       if (cfg.beard === 'courte') { ctx.save(); ctx.globalAlpha = 0.38; ctx.fillStyle = hairC; ctx.fill(bp); ctx.restore(); } else paint(bp, hairC, 6);
     }
     // Yeux
-    const look = dir * 4 + Math.sin(t * 0.9) * 2;
+    const look = dir * 4 + Math.sin(t * 0.9) * 2 + pw * (P.look || 0) * 2;
+    const lookY = pw * (P.lookY || 0);
     if (robot) {
       for (const sx of [-1, 1]) {
         const h = blink ? 8 : 46;
@@ -243,7 +287,8 @@ export function drawCharacter(ctx, c, x, y, s, a) {
       }
     } else {
       for (const sx of [-1, 1]) {
-        const ex = sx * 52 + look, ey = eyeY;
+        const ex = sx * 52 + look, ey = eyeY + lookY * 0.5;
+        if (pw > 0.5 && P.eyes === 'happy') { ctx.strokeStyle = '#2A1F1D'; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(sx * 52, eyeY + 8, 17, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke(); continue; }
         if (cfg.eyes === 'joyeux') { ctx.strokeStyle = '#2A1F1D'; ctx.lineWidth = 7; ctx.beginPath(); ctx.arc(sx * 52, ey + 6, 16, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke(); continue; }
         if (blink) { ctx.strokeStyle = '#2A1F1D'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(sx * 52 - 16, ey + 2); ctx.quadraticCurveTo(sx * 52, ey + 8, sx * 52 + 16, ey + 2); ctx.stroke(); continue; }
         if (cfg.eyes === 'grands') {
@@ -267,7 +312,7 @@ export function drawCharacter(ctx, c, x, y, s, a) {
     if (!robot && cfg.brows !== 'aucun') {
       const bh = cfg.brows === 'epais' ? 20 : 12;
       ctx.fillStyle = human ? shade(hairC, -0.1) : shade(skin, -0.45);
-      for (const sx of [-1, 1]) { ctx.save(); ctx.translate(sx * 54, eyeY - 46 - raise); ctx.rotate(sx * -0.08); ctx.fill(rr(-31, -bh / 2, 62, bh, bh / 2)); ctx.restore(); }
+      for (const sx of [-1, 1]) { ctx.save(); ctx.translate(sx * 54, eyeY - 46 - raise - (P.browTilt && sx === dir ? 10 * pw : 0)); ctx.rotate(sx * -0.08); ctx.fill(rr(-31, -bh / 2, 62, bh, bh / 2)); ctx.restore(); }
     }
     // Nez
     if (sp === 'chat') { ctx.fillStyle = '#E58B9B'; ctx.fill(path((p) => { p.moveTo(-14, 38); p.lineTo(14, 38); p.lineTo(0, 54); })); }
@@ -295,6 +340,13 @@ export function drawCharacter(ctx, c, x, y, s, a) {
       ctx.fillStyle = '#F4F1EE'; ctx.fillRect(-w, mouthY - h, w * 2, Math.min(10, h * 0.45));
       ctx.fillStyle = '#C8615E'; ctx.fill(ell(0, mouthY + h * 0.75, w * 0.6, h * 0.5));
       ctx.restore();
+    } else if (pw > 0.4 && (P.mouth === 'o' || P.mouth === 'open')) {
+      const o = P.mouth === 'o', mp = o ? ell(0, mouthY + 6, 20, 26) : path((p) => { p.moveTo(-46, mouthY - 4); p.quadraticCurveTo(0, mouthY + 4, 46, mouthY - 4); p.quadraticCurveTo(0, mouthY + 62, -46, mouthY - 4); });
+      ctx.fillStyle = '#4A1E1E'; ctx.fill(mp); if (!o) { ctx.save(); ctx.clip(mp); ctx.fillStyle = '#C8615E'; ctx.fill(ell(0, mouthY + 40, 26, 16)); ctx.restore(); }
+    } else if (pw > 0.4 && P.mouth === 'smile') {
+      ctx.strokeStyle = '#4A2E2E'; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(-40, mouthY - 6); ctx.quadraticCurveTo(0, mouthY + 34, 40, mouthY - 6); ctx.stroke();
+    } else if (pw > 0.4 && P.mouth === 'flat') {
+      ctx.strokeStyle = '#4A2E2E'; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(-26, mouthY + 4); ctx.quadraticCurveTo(0, mouthY - 4, 26, mouthY + 4); ctx.stroke();
     } else if (sp === 'chat') {
       ctx.strokeStyle = '#4A2E2E'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(-28, mouthY - 8); ctx.quadraticCurveTo(-14, mouthY + 8, 0, mouthY - 6); ctx.quadraticCurveTo(14, mouthY + 8, 28, mouthY - 8); ctx.stroke();
     } else if (cfg.mouth === 'grand') {
@@ -350,6 +402,27 @@ export function drawCharacter(ctx, c, x, y, s, a) {
     if (human && cfg.earrings) { ctx.fillStyle = '#E8B84A'; for (const sx of [-1, 1]) { ctx.beginPath(); ctx.arc(sx * (cfg.face === 'rond' ? 158 : 144), 60, 10, 0, 6.283); ctx.fill(); } }
   });
 
+  /* ---- Bras des poses (deux bras, mains en forme) ---- */
+  if (pw > 0.01) {
+    const sleeve = cfg.outfitType === 'tshirt' ? skin : shade(outfit, -0.12);
+    const handC = robot ? shade(skin, -0.15) : skin;
+    const arms = [];
+    if (P.main) arms.push([dir, P.main]); if (P.other) arms.push([-dir, P.other]);
+    if (P.right) arms.push([1, P.right]); if (P.left) arms.push([-1, P.left]);
+    for (const [side, A] of arms) {
+      ctx.save(); ctx.scale(side * tx, ty);
+      const sx = 215, sy = -282 + breathe * 0.4 - pw * (P.lift || 0);
+      const a1 = (REST.a1 + (A.a1 - REST.a1) * pw) * Math.PI / 180, a2 = (REST.a2 + (A.a2 - REST.a2) * pw) * Math.PI / 180;
+      const ex = sx + Math.cos(a1) * 210, ey = sy + Math.sin(a1) * 210;
+      const hx = ex + Math.cos(a2) * 185, hy = ey + Math.sin(a2) * 185;
+      if (outline) { ctx.strokeStyle = OL; ctx.lineWidth = 108; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.lineTo(hx, hy); ctx.stroke(); }
+      ctx.strokeStyle = shade(outfit, -0.12); ctx.lineWidth = 92;
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.strokeStyle = sleeve; ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(hx, hy); ctx.stroke();
+      drawHand(ctx, hx + Math.cos(a2) * 30, hy + Math.sin(a2) * 30, a2, pw > 0.6 ? A.hand : 'fist', handC, outline, OL, paint);
+      ctx.restore();
+    }
+  }
   /* ---- Bras du geste ---- */
   if (g > 0.02) {
     ctx.save(); ctx.scale(dir * tx, ty);

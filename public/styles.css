@@ -674,3 +674,13 @@ dialog[open] { animation: pop .18s ease-out; }
 .dest:disabled { opacity: .6; cursor: progress; }
 .dest.last::after { content: 'Dernier choix'; position: absolute; top: 10px; right: 10px; font-size: 10.5px; font-weight: 800; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); }
 #rvDone { display: grid; gap: 8px; }
+
+/* ---------- Gestes : palette ---------- */
+.gest-pal { display: grid; gap: 8px; }
+.gest-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gest-head span { font-size: 12px; font-weight: 800; color: var(--stage-muted, var(--muted)); text-transform: uppercase; letter-spacing: .04em; }
+.gest-head .btn { height: 28px; font-size: 12px; padding: 0 8px; color: #8B76FF; }
+.gest-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.gest-chip { height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--stage-line, var(--line)); background: var(--stage-2, var(--surface-2)); color: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.gest-chip:hover { border-color: #8B76FF; color: #8B76FF; }
+.dlg .gest-pal .hint { color: var(--muted); }

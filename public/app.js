@@ -1602,6 +1602,7 @@ function renderInspector() {
       <button class="icon-btn" data-ed="delScene" title="Supprimer (Suppr)" aria-label="Supprimer la scène">${ic('trash')}</button></div></div>
     ${elementsList('scene')}
     ${def.fields.map((f) => fieldHtml(f, s.props)).join('')}
+    ${s.type === 'presentateur' ? `<div class="insp-sec">${gesturePalette('script')}</div>` : ''}
     ${aiVideoSection(s)}
     ${textSection('scene', s)}
     <div class="insp-sec"><div class="label">Rythme et transition</div>
@@ -1622,7 +1623,7 @@ function fieldHtml(f, props) {
   }
   if (f.type === 'voice') {
     const sc = curScene(), vo = v && ed.assets.voices?.[v], job = sc.props.voiceJob;
-    const chars = (sc.props.script || '').length;
+    const chars = V.stripCues(sc.props.script || '').length;
     return `<div class="field"><span>${esc(f.label)}</span><div class="voice-box">
       ${job ? '<div class="job"><span class="spinner"></span><span id="voiceJobStatus">Génération de la voix…</span></div>'
         : v ? `<div class="row"><button class="icon-btn" data-ed="playVoice" aria-label="Écouter la voix">${ic('play')}</button><span style="flex:1;font-weight:700">Voix prête${vo ? `, ${vo.duration.toFixed(1).replace('.', ',')} s` : ''}</span><button class="btn ghost" data-ed="removeVoice">Retirer</button></div>`
@@ -1677,6 +1678,67 @@ function aiVideoSection(s) {
     ${state.ai.configured ? '' : '<span class="hint" style="color:var(--stage-muted)">Ajoute une clé fal.ai dans Réglages pour générer.</span>'}`;
   return `<div class="insp-sec"><div class="label">Vidéo IA de l’avatar</div>${body}</div>`;
 }
+/* =========================================================
+   Mise en scène par le texte : palette de gestes et mode automatique
+   ========================================================= */
+const CUE_LABELS = { salut: 'Salue', pouce: 'Pouce levé', oui: 'Acquiesce', non: 'Fait non', pense: 'Réfléchit', bravo: 'Célèbre', bof: 'Hausse les épaules', explique: 'Explique', voici: 'Voici', applaudit: 'Applaudit', wow: 'Surpris', haut: 'Montre en haut', gauche: 'Montre à gauche', droite: 'Montre à droite' };
+function gesturePalette(target) {
+  return `<div class="gest-pal" data-gest-target="${target}">
+    <div class="gest-head"><span>Gestes de l’avatar</span><button class="btn ghost" data-autocue="${target}">${ic('spark')}Mise en scène automatique</button></div>
+    <div class="gest-chips">${Object.entries(CUE_LABELS).map(([k, l]) => `<button type="button" class="gest-chip" data-cue="${k}" title="Insère [${k}] à l’endroit du curseur">${esc(l)}</button>`).join('')}</div>
+    <p class="hint">Clique un geste pour l’insérer dans le texte, là où se trouve le curseur, par exemple « Bonjour [salut] ». Il n’est pas prononcé : l’avatar le fait au mot suivant.</p></div>`;
+}
+const AUTO_RULES = [
+  { cue: 'salut', re: /^(bonjour|salut|hello|hi|hey|bienvenue|welcome|bonsoir)(?=[\s.,!?;:؟،]|$)|^(مرحب|السلام|أهلا)/i },
+  { cue: 'bravo', re: /^(bravo|félicitations|felicitations|génial|genial|incroyable|congratulations|congrats|amazing|awesome|youpi)(?=[\s.,!?;:؟،]|$)|^(مبروك|رائع|مذهل)/i },
+  { cue: 'pouce', re: /^(super|parfait|top|excellent|facile|simple|perfect|great|easy)(?=[\s.,!?;:؟،]|$)|^(ممتاز|سهل)/i },
+  { cue: 'voici', re: /^(voici|voilà|voila|découvrez|decouvrez|présente|presente|here|discover|meet|introducing)(?=[\s.,!?;:؟،]|$)|^(إليكم|اكتشف|نقدم)/i },
+  { cue: 'pense', re: /^(pourquoi|comment|et si|imaginez|why|how|what|imagine)(?=[\s.,!?;:؟،]|$)|^(لماذا|كيف|تخيل)/i },
+  { cue: 'non', re: /^(non|jamais|fini|stop|no|never)(?=[\s.,!?;:؟،]|$)|^(لا|أبدا)(?=[\s.,!?;:؟،]|$)/i },
+  { cue: 'oui', re: /^(oui|exactement|bien sûr|d'accord|absolument|yes|exactly|of course|absolutely)(?=[\s.,!?;:؟،]|$)|^(نعم|بالتأكيد)/i },
+  { cue: 'haut', re: /^(attention|important|regardez|retenez|look|remember)(?=[\s.,!?;:؟،]|$)|^(انتبه|تذكر)/i },
+  { cue: 'applaudit', re: /^(merci|thank|thanks)(?=[\s.,!?;:؟،]|$)|^(شكرا)/i },
+];
+/** Ajoute des gestes selon les mots du texte (une balise par phrase au plus). */
+function autoCues(text) {
+  const clean = V.stripCues(text);
+  const sentences = clean.match(/[^.!?…؟]+[.!?…؟]*\s*/g) || [clean];
+  let n = 0, i = 0;
+  const out = sentences.map((sent) => {
+    i++;
+    const words = sent.split(/(\s+)/);
+    for (let w = 0; w < words.length; w++) {
+      const rest = words.slice(w).join('').trimStart();
+      const rule = AUTO_RULES.find((r) => r.re.test(rest));
+      if (rule && words[w].trim()) { n++; words.splice(w, 0, `[${rule.cue}] `); return words.join(''); }
+    }
+    if (/[?؟]\s*$/.test(sent)) { n++; return `[bof] ${sent}`; }
+    if (i % 2 === 0 && sent.trim().split(/\s+/).length > 4) { n++; return `[explique] ${sent}`; }
+    return sent;
+  });
+  return { text: out.join('').trim(), n };
+}
+function insertCue(textarea, cue) {
+  const v = textarea.value, a = textarea.selectionStart ?? v.length, b = textarea.selectionEnd ?? a;
+  const before = v.slice(0, a), after = v.slice(b);
+  const ins = `${before && !/\s$/.test(before) ? ' ' : ''}[${cue}]${after && !/^\s/.test(after) ? ' ' : ''}`;
+  textarea.value = before + ins + after;
+  const pos = (before + ins).length; textarea.focus(); textarea.setSelectionRange(pos, pos);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+document.addEventListener('click', (e) => {
+  const chip = e.target.closest('.gest-pal [data-cue]'), auto = e.target.closest('[data-autocue]');
+  if (!chip && !auto) return;
+  const pal = (chip || auto).closest('.gest-pal'), sel = pal?.dataset.gestTarget;
+  const ta = sel === 'script' ? $('#inspector textarea[data-k="script"]') : $(sel);
+  if (!ta) return;
+  if (chip) { insertCue(ta, chip.dataset.cue); return; }
+  if (!V.stripCues(ta.value).trim()) { toast('Écris d’abord le texte.'); return; }
+  const r = autoCues(ta.value);
+  ta.value = r.text; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.dispatchEvent(new Event('change', { bubbles: true }));
+  toast(r.n ? `${plural(r.n, 'geste placé', 'gestes placés')} automatiquement. Tu peux les modifier dans le texte.` : 'Aucun mot-clé trouvé : ajoute des gestes avec la palette.', r.n ? 'ok' : '');
+});
+
 /* =========================================================
    Clips audio libres : aperçu, découpe, menu contextuel, ajout de voix
    ========================================================= */
@@ -1816,6 +1878,7 @@ function addVoiceDialog() {
     <div class="segmented" id="vSrc"><button data-src="free" aria-pressed="true">${ic('text')}Depuis un texte (gratuit)</button><button data-src="rec" aria-pressed="false">${ic('mic')}Enregistrer</button><button data-src="file" aria-pressed="false">${ic('upload')}Importer</button></div>
     <div style="display:grid;gap:12px">
       <label class="field"><span>Texte à dire</span><textarea dir="auto" id="vText" rows="4" placeholder="Bonjour ! Découvrez aujourd’hui…"></textarea></label>
+      ${gesturePalette('#vText')}
       <div class="segmented" id="vLang">${Object.entries(FREE_LANGS).map(([k, l], i) => `<button data-lang="${k}" aria-pressed="${i === 0}">${l}</button>`).join('')}</div>
       <p class="hint" id="vLangHint" style="display:none"></p>
       <div class="grid-2"><label class="field"><span>Voix</span><select id="vVoice">${FREE_VOICES.filter((fv) => fv.lang === 'fr').map((fv) => `<option value="${fv.key}">${esc(fv.label)}</option>`).join('')}</select></label>
@@ -1845,7 +1908,7 @@ function addVoiceDialog() {
         busy = true; go.disabled = true; go.innerHTML = '<span class="spinner"></span>Génération…';
         const key = $('#vVoice', m).value, subs = $('#vSubs', m).checked;
         try {
-          const blob = await freeTts(text, key, +$('#vSpeed', m).value, (p) => { const st = $('#vStatus'); if (st) st.textContent = p.phase === 'download' ? `Téléchargement de la voix, ${Math.round(p.ratio * 100)} % (une seule fois)…` : 'Synthèse de la voix…'; });
+          const blob = await freeTts(V.stripCues(text), key, +$('#vSpeed', m).value, (p) => { const st = $('#vStatus'); if (st) st.textContent = p.phase === 'download' ? `Téléchargement de la voix, ${Math.round(p.ratio * 100)} % (une seule fois)…` : 'Synthèse de la voix…'; });
           const fv = FREE_VOICES.find((x) => x.key === key);
           closeModal();
           await addVoiceClip(await toWav(blob), `Voix ${fv?.label.split(',')[0] || ''}`.trim(), at, subs ? text : '');
@@ -1870,7 +1933,7 @@ async function addVoiceClip(wav, name, at, subtitleText = '') {
     await reloadAssets();
     if (subtitleText) {
       const env = ed.assets.clipEnv?.[media];
-      const sentences = subtitleText.match(/[^.!?…؟]+[.!?…؟]*/g)?.map((x) => x.trim()).filter(Boolean) || [subtitleText];
+      const sentences = V.stripCues(subtitleText).match(/[^.!?…؟]+[.!?…؟]*/g)?.map((x) => x.trim()).filter(Boolean) || [subtitleText];
       const times = env ? V.estimateTimes(env, sentences.map((x) => x.length + 4)) : sentences.map((_, i) => (i * buf.duration) / sentences.length);
       sentences.forEach((txt, i) => {
         const st = c.at + times[i], en = i < sentences.length - 1 ? c.at + times[i + 1] - 0.05 : c.at + c.dur + 0.2;
@@ -2781,7 +2844,7 @@ function onEdClick(e) {
       onMount: (m) => $$('[data-kind]', m).forEach((x) => x.addEventListener('click', () => (x.dataset.kind === 'photo' ? photoAvatarDialog(null, onSaved) : x.dataset.kind === 'galerie' ? galleryDialog(onSaved) : illustratedDialog(null, onSaved)))),
     });
   }
-  else if (a === 'recordVoice' && s) { const sid = s.id; recordDialog(s.props.script).then(async (wav) => { if (wav) await storeVoice(sid, wav, 'voix-enregistree'); }); }
+  else if (a === 'recordVoice' && s) { const sid = s.id; recordDialog(V.stripCues(s.props.script)).then(async (wav) => { if (wav) await storeVoice(sid, wav, 'voix-enregistree'); }); }
   else if (a === 'uploadVoice' && s) {
     const sid = s.id, inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'audio/*';
     inp.onchange = async () => { const f = inp.files[0]; if (!f) return; try { toast('Préparation de l’audio…'); await storeVoice(sid, await toWav(f), f.name); } catch { toast('Fichier audio illisible.', 'error'); } };
@@ -2796,7 +2859,7 @@ function onEdClick(e) {
   }
   else if (a === 'freeLang' && s) { beforeChange(); s.props.freeVoice = FREE_VOICES.find((fv) => fv.lang === b.dataset.lang).key; changed({ inspector: true }); }
   else if (a === 'freeVoice' && s) {
-    const text = (s.props.script || '').trim(); if (!text) return toast('Écris d’abord le texte prononcé.');
+    const text = V.stripCues(s.props.script || '').trim(); if (!text) return toast('Écris d’abord le texte prononcé.');
     const sid = s.id, key = s.props.freeVoice || FREE_VOICES[0].key, speed = s.props.freeSpeed || 1;
     b.disabled = true; b.innerHTML = '<span class="spinner"></span>Génération…';
     const st = $('#freeStatus');
@@ -2816,7 +2879,7 @@ function onEdClick(e) {
       const btn = $('[data-ed="freeVoice"]'); if (btn) { btn.disabled = false; btn.innerHTML = `${ic('play')}Générer`; }
     });
   }
-  else if (a === 'ttsVoice' && s) startJob(s, 'voiceJob', { model: 'tts', text: s.props.script, voice: s.props.ttsVoice || 'Aria' });
+  else if (a === 'ttsVoice' && s) startJob(s, 'voiceJob', { model: 'tts', text: V.stripCues(s.props.script), voice: s.props.ttsVoice || 'Aria' });
   else if (a === 'genVideo' && s) {
     const vo = ed.assets.voices?.[s.props.voice]; if (!vo) return;
     const model = s.props.model || 'avatar-standard', cost = vo.duration * (model === 'avatar-pro' ? 0.115 : 0.0562);
@@ -2867,7 +2930,7 @@ function onEdClick(e) {
   }
   else if (a === 'syncTitles') {
     const s = curScene(), vo = ed.assets.voices?.[s.props.voice]; if (!vo) return;
-    const sentences = String(s.props.script || '').match(/[^.!?…؟]+[.!?…؟]*/g)?.map((x) => x.trim()).filter(Boolean) || [];
+    const sentences = V.stripCues(s.props.script || '').match(/[^.!?…؟]+[.!?…؟]*/g)?.map((x) => x.trim()).filter(Boolean) || [];
     if (!sentences.length) return toast('Écris d’abord le texte prononcé.');
     const times = V.estimateTimes(vo, sentences.map((x) => x.length + 4));
     beforeChange();

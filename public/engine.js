@@ -3,7 +3,8 @@
  * l'aperçu et l'export produisent exactement la même chose.
  */
 import { Muxer, ArrayBufferTarget } from './vendor/mp4-muxer.mjs';
-import { drawCharacter, synthTalk, DEFAULT_CHAR } from './avatar.js';
+import { drawCharacter, synthTalk, DEFAULT_CHAR, GESTURE_LIST, POSE_DUR } from './avatar.js';
+export { GESTURE_LIST };
 import { renderTrack, bufferToWav, TRACKS as MUSIC_TRACKS } from './music.js';
 import { renderSfx } from './sfx.js';
 export { MUSIC_TRACKS };
@@ -12,8 +13,62 @@ export const VOICE_DELAY = 0.5;
 /** Décalage de la voix dans sa scène (réglable dans la timeline audio). */
 export const voiceDelayOf = (scene) => { const v = scene?.props?.voiceDelay; return v == null ? VOICE_DELAY : Math.max(0, +v); };
 /** Réglages effectifs de la musique : position dans la vidéo, fin, fondus, volume. */
+/* ---------------------------------------------------------------
+   Mise en scène par le texte : [salut], [pouce], [voici]…
+   Les balises ne sont pas prononcées ; le geste se déclenche au mot qui suit.
+   --------------------------------------------------------------- */
+export const CUE_WORDS = {
+  salut: 'wave', pouce: 'thumbsUp', oui: 'nod', non: 'shake', pense: 'think', bravo: 'celebrate', bof: 'shrug',
+  explique: 'explain', voici: 'welcome', applaudit: 'clap', wow: 'surprised', haut: 'pointUp', gauche: 'pointLeft', droite: 'pointRight',
+};
+const CUE_ALIASES = { bonjour: 'wave', hello: 'wave', wave: 'wave', top: 'thumbsUp', thumb: 'thumbsUp', acquiesce: 'nod', nod: 'nod', shake: 'shake', reflechit: 'think', réfléchit: 'think', think: 'think',
+  celebre: 'celebrate', célèbre: 'celebrate', youpi: 'celebrate', celebrate: 'celebrate', haussement: 'shrug', shrug: 'shrug', explain: 'explain', presente: 'welcome', présente: 'welcome', welcome: 'welcome',
+  clap: 'clap', surpris: 'surprised', surprise: 'surprised', 'montre-haut': 'pointUp', up: 'pointUp', titre: 'pointUp', 'montre-gauche': 'pointLeft', left: 'pointLeft', 'montre-droite': 'pointRight', right: 'pointRight' };
+const CUE_RE = /\[\s*([a-zA-ZÀ-ÿ-]+)\s*\]/g;
+const cueOf = (w) => { const k = w.toLowerCase(); return CUE_WORDS[k] || CUE_ALIASES[k] || null; };
+/** Retire les balises de geste (pour la voix et les sous-titres). */
+export const stripCues = (text) => String(text || '').replace(CUE_RE, (m, w) => (cueOf(w) ? ' ' : m)).replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '').trim();
+/** Liste des gestes du texte, chacun rattaché à l'index du mot qui le suit. */
+export function parseCues(text) {
+  const cues = []; let words = 0; let last = 0; const src = String(text || '');
+  for (const m of src.matchAll(CUE_RE)) {
+    const pose = cueOf(m[1]); if (!pose) continue;
+    words += src.slice(last, m.index).split(/\s+/).filter(Boolean).length; last = m.index + m[0].length;
+    cues.push({ pose, word: words });
+  }
+  return cues;
+}
+const cueCache = new Map();
+/** Gestes datés (secondes depuis le début de la voix), calés sur la voix si elle existe. */
+export function cueEvents(text, voice, fallbackDur = 4) {
+  if (!text || !String(text).includes('[')) return [];
+  const key = `${text}|${voice ? voice.duration.toFixed(3) + ':' + voice.env.length : 'synth:' + fallbackDur}`;
+  if (cueCache.has(key)) return cueCache.get(key);
+  const cues = parseCues(text), words = stripCues(text).split(/\s+/).filter(Boolean);
+  let ev = [];
+  if (cues.length && words.length) {
+    const weights = words.map((w) => w.length + 2);
+    const times = voice ? estimateTimes(voice, weights) : (() => { const tot = weights.reduce((a, b) => a + b, 0); let acc = 0; return weights.map((w) => { const t = (acc / tot) * fallbackDur; acc += w; return t; }); })();
+    ev = cues.map((c) => ({ pose: c.pose, at: Math.max(0, (times[Math.min(c.word, times.length - 1)] ?? 0) - 0.18), dur: POSE_DUR[c.pose] || 1.6 }));
+  }
+  if (cueCache.size > 200) cueCache.clear();
+  cueCache.set(key, ev);
+  return ev;
+}
+/** Pose active à l'instant lt : { pose, pw (0..1, avec fondu), pt } ou null. */
+export function poseAt(events, lt) {
+  let best = null;
+  for (const e of events) {
+    const k = lt - e.at; if (k < 0 || k > e.dur) continue;
+    const pw = Math.min(1, k / 0.25, (e.dur - k) / 0.3);
+    if (!best || pw > best.pw) best = { pose: e.pose, pw: Math.max(0, pw), pt: k };
+  }
+  return best;
+}
+
 /* Clips audio libres (voix off, morceaux de musique découpés) */
-let NARR = [];
+let NARR = [], NARR_EV = [];
+function narrPose(T) { return poseAt(NARR_EV, T); }
 function narrTalk(T) {
   for (const n of NARR) {
     const lt = T - n.at;
@@ -1033,7 +1088,8 @@ export const SCENES = {
       const isPhoto = av.kind === 'photo';
       const vid = p.video ? S.assets?.videos?.[p.video] : null;
       const photo = isPhoto ? S.assets?.photos?.[av.photo] : null;
-      const anim = { t, talk, gesture, dir: left ? 1 : -1, outfit: b.colors.primary, accent: b.colors.secondary };
+      const cue = voice ? poseAt(cueEvents(p.script, voice), lt) : nt != null ? narrPose(S.T) : poseAt(cueEvents(p.script, null, vdur), lt);
+      const anim = { t, talk, gesture, dir: left ? 1 : -1, outfit: b.colors.primary, accent: b.colors.secondary, ...(cue ? { pose: cue.pose, pw: cue.pw, pt: cue.pt } : {}) };
 
       const realSrc = vid && vid.readyState >= 2 ? vid : photo;
       const badge = (x, y) => {
@@ -1127,7 +1183,7 @@ export const SCENES = {
       }
 
       if (p.captions && p.script) {
-        const c = activeCaption(p.script, lt, vdur);
+        const c = activeCaption(stripCues(p.script), lt, vdur);
         if (c) {
           const C = fit(S, c.text, { display: false, size: (S.portrait ? 50 : 42) * u, maxW: Math.min(W * 0.78, 1400 * u), maxLines: 2 });
           setFont(ctx, C.family, 700, C.size); setTrack(ctx, 0);
@@ -1526,7 +1582,7 @@ export const ANIM_OUT = { none: 'Aucune', fade: 'Fondu', slideUp: 'Monte', slide
 export const ANIM_EMPH = { none: 'Aucune', pulse: 'Pulsation', float: 'Flottement', wiggle: 'Balancement' };
 export const EASINGS = { outCubic: 'Doux', outExpo: 'Rapide', outBack: 'Rebond', spring: 'Ressort', inOutCubic: 'Progressif', lin: 'Linéaire' };
 export const SHAPES = { rect: 'Rectangle', circle: 'Cercle', line: 'Ligne', arrow: 'Flèche', star: 'Étoile', check: 'Coche', heart: 'Cœur', pin: 'Repère' };
-export const GESTURES = { auto: 'Selon la parole', idle: 'Au repos', wave: 'Salue', pointLeft: 'Montre à gauche', pointRight: 'Montre à droite' };
+export const GESTURES = { auto: 'Selon le texte et la parole', idle: 'Au repos', ...GESTURE_LIST };
 
 let elCount = 0;
 export function newElement(type, extra = {}) {
@@ -1737,15 +1793,19 @@ function drawOneElement(S, el, lt, d, hits) {
     else if (el.talk === 'voice' && narrTalk(S.T) != null) { talk = narrTalk(S.T); act = ((narrTalk(S.T - 0.4) || 0) + talk + (narrTalk(S.T + 0.4) || 0)) / 3; }
     else if (el.talk === 'mime' || (el.talk === 'voice' && !sp)) { const on = el.talk === 'mime'; talk = on ? synthTalk(lt) : 0; act = on ? 0.55 : 0; }
     const g = el.gesture || 'auto';
-    const gesture = g === 'idle' ? 0 : g === 'wave' ? 0.75 + 0.25 * Math.sin(lt * 7) : g === 'pointLeft' || g === 'pointRight' ? 1 : clamp(Math.sin(lt * 0.8 + 0.6) * 1.7 - 0.4) * clamp(act * 2);
     const dir = g === 'pointLeft' ? -1 : g === 'pointRight' ? 1 : (el.x ?? 0.5) > 0.5 ? -1 : 1;
+    let cue = null;
+    if (GESTURE_LIST[g]) { const k = lt - (+el.start || 0); cue = { pose: g, pw: Math.min(1, Math.max(0, k) / 0.35), pt: k }; }
+    else if (g === 'auto') cue = sp ? poseAt(cueEvents(S.p?.script, sp), lt - (S.voiceDelay ?? VOICE_DELAY)) : narrPose(S.T);
+    const gesture = cue || g === 'idle' ? 0 : clamp(Math.sin(lt * 0.8 + 0.6) * 1.7 - 0.4) * clamp(act * 2);
+    const poseArgs = cue ? { pose: cue.pose, pw: cue.pw, pt: cue.pt } : {};
     if (el.frame === 'circle' || el.frame === 'card') {
       ctx.save(); ctx.fillStyle = mix(S.pal.base, S.pal.accent, 0.35);
       if (el.frame === 'circle') { ctx.beginPath(); ctx.arc(0, 0, Math.min(bw, bh) / 2, 0, 6.283); } else rrect(ctx, x0, y0, bw, bh, 28 * u);
       ctx.fill(); ctx.clip();
-      drawCharacter(ctx, av, 0, el.frame === 'circle' ? Math.min(bw, bh) / 2 * 1.05 : bh / 2, (el.frame === 'circle' ? Math.min(bw, bh) * 1.05 : bh * 0.95) / 820, { t: lt, talk, gesture, dir, outfit: S.b.colors.primary, accent: S.b.colors.secondary });
+      drawCharacter(ctx, av, 0, el.frame === 'circle' ? Math.min(bw, bh) / 2 * 1.05 : bh / 2, (el.frame === 'circle' ? Math.min(bw, bh) * 1.05 : bh * 0.95) / 820, { t: lt, talk, gesture, dir, outfit: S.b.colors.primary, accent: S.b.colors.secondary, ...poseArgs });
       ctx.restore();
-    } else drawCharacter(ctx, av, 0, bh / 2, (bh * 0.95) / 820, { t: lt, talk, gesture, dir, outfit: S.b.colors.primary, accent: S.b.colors.secondary });
+    } else drawCharacter(ctx, av, 0, bh / 2, (bh * 0.95) / 820, { t: lt, talk, gesture, dir, outfit: S.b.colors.primary, accent: S.b.colors.secondary, ...poseArgs });
   }
   ctx.restore();
   ctx.filter = 'none';
@@ -1793,8 +1853,13 @@ function bufFor(ctx, W, H) {
 /** Dessine l'image du projet au temps `time` (en secondes). */
 export function renderFrame(ctx, W, H, project, brand, assets, time, opts = {}) {
   const hits = opts.hits || null;
-  NARR = [];
-  if (assets?.clipEnv) for (const c of audioClipsOf(project)) { if (c.kind === 'voice' && c.media && assets.clipEnv[c.media]) NARR.push({ at: +c.at || 0, dur: +c.dur || 0, offset: +c.offset || 0, env: assets.clipEnv[c.media] }); }
+  NARR = []; NARR_EV = [];
+  if (assets?.clipEnv) for (const c of audioClipsOf(project)) {
+    if (c.kind !== 'voice' || !c.media || !assets.clipEnv[c.media]) continue;
+    const at = +c.at || 0, dur = +c.dur || 0, off = +c.offset || 0;
+    NARR.push({ at, dur, offset: off, env: assets.clipEnv[c.media] });
+    for (const e of cueEvents(c.text, assets.clipEnv[c.media])) { if (e.at >= off - 0.2 && e.at < off + dur) NARR_EV.push({ ...e, at: at + e.at - off }); }
+  }
   const B = normBrand(brand);
   const { items, total } = timeline(project);
   if (!items.length) { ctx.fillStyle = B.colors.dark; ctx.fillRect(0, 0, W, H); return; }
