@@ -397,9 +397,31 @@ async function api(req, env, url) {
   return fail('Route inconnue', 404);
 }
 
+/* ---------- Voix gratuites : relais et cache des modèles Piper ---------- */
+const PIPER_BASE = 'https://huggingface.co/diffusionstudio/piper-voices/resolve/main';
+const PIPER_PATH = /^(voices\.json|[a-z]{2}\/[a-z]{2}_[A-Z]{2}\/[\w-]+\/[\w-]+\/[\w.-]+\.onnx(\.json)?)$/;
+async function piperVoice(req, env, url, ctx) {
+  const path = decodeURIComponent(url.pathname.replace(/^\/voix-piper\//, ''));
+  if (!PIPER_PATH.test(path) || req.method !== 'GET') return fail('Voix introuvable', 404);
+  const cache = typeof caches !== 'undefined' ? caches.default : null;
+  const key = new Request(url.origin + '/voix-piper/' + path);
+  const hit = cache && (await cache.match(key));
+  if (hit) return hit;
+  const r = await fetch(`${env.PIPER_BASE || PIPER_BASE}/${path}`, { redirect: 'follow', cf: { cacheEverything: true, cacheTtl: 2592000 } });
+  if (!r.ok) return fail('Voix indisponible pour le moment', 502);
+  const res = new Response(r.body, { headers: {
+    'content-type': path.endsWith('.json') ? 'application/json; charset=utf-8' : 'application/octet-stream',
+    'cache-control': 'public, max-age=2592000, immutable', 'x-content-type-options': 'nosniff',
+    ...(r.headers.get('content-length') ? { 'content-length': r.headers.get('content-length') } : {}),
+  } });
+  if (cache && ctx?.waitUntil) ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
+}
+
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
+    if (url.pathname.startsWith('/voix-piper/')) return piperVoice(req, env, url, ctx);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       const origin = req.headers.get('origin');

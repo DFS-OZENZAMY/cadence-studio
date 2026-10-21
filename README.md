@@ -14,7 +14,10 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
 - **Avatars présentateurs** :
   - **Personnages cartoon, gratuits et illimités** : une galerie de 16 personnages prêts à l’emploi (sélection multiple), et un personnalisateur complet. 5 espèces (humain, robot, chat, renard, ours), 3 styles de dessin (classique, mascotte, contour BD), forme du visage, yeux, sourcils, nez, bouche, 11 coiffures, 5 tenues (couleurs du client ou au choix), lunettes, casquette, bonnet, casque audio, barbes, et un bouton « Aléatoire ». Ils respirent, clignent des yeux, bougent la tête, gesticulent, et leur bouche suit la voix.
   - **Réalistes par IA, en option** : une photo devient une personne qui parle (Kling Avatar v2 via fal.ai, environ 0,056 $ par seconde en Standard, 0,115 $ en Pro).
-- **Voix** : enregistrement au micro directement dans l’éditeur, import d’un fichier audio, ou voix IA à partir du texte (ElevenLabs via fal.ai, environ 0,10 $ pour 1 000 caractères).
+- **Voix** :
+  - **voix gratuites et illimitées à partir du texte**, calculées dans le navigateur (Piper) : Siwis et Jessica (féminines), Pierre et Gilles (masculines), vitesse réglable. La voix se télécharge une seule fois (27 à 74 Mo), ensuite la génération prend quelques secondes ;
+  - enregistrement au micro directement dans l’éditeur, ou import d’un fichier audio ;
+  - voix IA premium en option (ElevenLabs via fal.ai, environ 0,10 $ pour 1 000 caractères).
 - **Scène Présentateur** : avatar à côté du contenu, en médaillon ou plein cadre ; les points s’affichent au fil de la voix ; sous-titres synchronisés ; durée calée automatiquement sur la voix.
 - **Mixage audio** à l’export : voix + musique, la musique baisse automatiquement quand l’avatar parle.
 - **Suivi des coûts IA** : estimation avant chaque génération et total du mois dans les Réglages.
@@ -26,6 +29,8 @@ Le rendu vidéo se fait **dans ton navigateur** grâce à WebCodecs, l’encodeu
 Cloudflare héberge l’application et stocke clients, projets et historique dans une base **D1**.
 
 Navigateur conseillé pour l’export : **Google Chrome ou Microsoft Edge à jour** (Réglages → Compatibilité vérifie ton navigateur).
+
+Voix gratuites : [Piper](https://github.com/rhasspy/piper) via [@mintplex-labs/piper-tts-web](https://github.com/Mintplex-Labs/piper-tts-web) et onnxruntime-web (licences MIT), embarqués dans `public/vendor/`. Les modèles de voix sont téléchargés depuis Hugging Face par le Worker (route `/voix-piper/`), mis en cache par Cloudflare puis par le navigateur. Licences des voix : Siwis CC BY 4.0, UPMC (Jessica, Pierre) CC BY-SA 4.0, Gilles CC0. Pour Siwis et UPMC, mentionne la source (par exemple dans la description de la vidéo). Détails dans `public/vendor/piper/LICENCES.txt`.
 
 Bibliothèque tierce : [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) (licence MIT, gratuite, embarquée dans `public/vendor/`).
 

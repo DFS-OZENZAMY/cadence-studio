@@ -141,6 +141,30 @@ async function toWav(blob, sr = 24000) {
   return new Blob([out], { type: 'audio/wav' });
 }
 const fmtUsd = (n) => `${(+n || 0).toFixed(2).replace('.', ',')} $`;
+/* Voix gratuites : Piper, calculé dans le navigateur */
+const FREE_VOICES = [
+  { key: 'fr_FR-siwis-medium#0', label: 'Siwis, voix féminine', size: '63 Mo', credit: 'Siwis, CC BY 4.0' },
+  { key: 'fr_FR-upmc-medium#0', label: 'Jessica, voix féminine', size: '74 Mo', credit: 'UPMC, CC BY-SA 4.0' },
+  { key: 'fr_FR-upmc-medium#1', label: 'Pierre, voix masculine', size: '74 Mo', credit: 'UPMC, CC BY-SA 4.0' },
+  { key: 'fr_FR-gilles-low#0', label: 'Gilles, voix masculine (légère)', size: '27 Mo', credit: 'Gilles, CC0' },
+  { key: 'fr_FR-siwis-low#0', label: 'Siwis, voix féminine (légère)', size: '27 Mo', credit: 'Siwis, CC BY 4.0' },
+];
+let piperMod = null, piperVoiceLoaded = null;
+async function freeTts(text, voiceKey, speed, onProgress) {
+  const [voiceId, spk] = voiceKey.split('#');
+  piperMod ||= await import('./vendor/piper/piper-tts.mjs');
+  globalThis.__piperOpts = { speakerId: +spk || 0, lengthScale: 1 / (speed || 1) };
+  if (piperVoiceLoaded !== voiceId) piperMod.TtsSession._instance = null;
+  const session = await piperMod.TtsSession.create({
+    voiceId,
+    progress: (p) => onProgress?.({ phase: 'download', ratio: p.total ? p.loaded / p.total : 0, url: p.url }),
+    wasmPaths: { onnxWasm: '/vendor/ort/', piperData: '/vendor/piper/piper_phonemize.data', piperWasm: '/vendor/piper/piper_phonemize.wasm' },
+  });
+  piperVoiceLoaded = voiceId;
+  onProgress?.({ phase: 'synth' });
+  return session.predict(text);
+}
+
 const TTS_VOICES = { 'Voix féminines': ['Aria', 'Sarah', 'Laura', 'Charlotte', 'Alice', 'Matilda', 'Jessica', 'Lily'], 'Voix masculines': ['George', 'Roger', 'Charlie', 'Callum', 'Liam', 'Will', 'Eric', 'Chris', 'Brian', 'Daniel', 'Bill'] };
 
 async function passHash(pw, saltHex) {
@@ -1168,7 +1192,14 @@ function fieldHtml(f, props) {
       <div class="row" style="flex-wrap:wrap"><button class="btn" data-ed="recordVoice">${ic('mic')}Enregistrer</button><button class="btn" data-ed="uploadVoice">${ic('upload')}Importer</button></div>
       <div class="row"><select data-tts-voice aria-label="Voix IA" style="flex:1">${Object.entries(TTS_VOICES).map(([g, l]) => `<optgroup label="${g}">${l.map((n) => `<option ${(sc.props.ttsVoice || 'Aria') === n ? 'selected' : ''}>${n}</option>`).join('')}</optgroup>`).join('')}</select>
         <button class="btn" data-ed="ttsVoice" ${state.ai.configured && !job && chars ? '' : 'disabled'}>${ic('spark')}Voix IA</button></div>
-      <span class="hint" style="color:var(--stage-muted)">${state.ai.configured ? `Lit le texte prononcé avec une voix naturelle, environ ${fmtUsd(Math.max(0.01, (chars / 1000) * 0.1))}.` : 'Voix IA : ajoute une clé fal.ai dans Réglages.'}</span>
+      <span class="hint" style="color:var(--stage-muted)">${state.ai.configured ? `Voix IA premium : environ ${fmtUsd(Math.max(0.01, (chars / 1000) * 0.1))}.` : 'Voix IA premium : ajoute une clé fal.ai dans Réglages.'}</span>
+      <div class="free-tts">
+        <div class="label" style="display:flex;justify-content:space-between"><span>Voix gratuite</span><span class="badge-free">Gratuit, illimité</span></div>
+        <div class="row"><select data-free-voice aria-label="Voix gratuite" style="flex:1">${FREE_VOICES.map((fv) => `<option value="${fv.key}" ${(sc.props.freeVoice || FREE_VOICES[0].key) === fv.key ? 'selected' : ''}>${esc(fv.label)}</option>`).join('')}</select>
+          <button class="btn primary" data-ed="freeVoice" ${chars && !job ? '' : 'disabled'}>${ic('play')}Générer</button></div>
+        <div class="range-row"><span class="hint" style="color:var(--stage-muted)">Vitesse</span><input type="range" min="0.75" max="1.35" step="0.05" value="${sc.props.freeSpeed || 1}" data-free-speed aria-label="Vitesse de la voix"><output id="freeSpeedOut">×${(+(sc.props.freeSpeed || 1)).toFixed(2).replace('.', ',')}</output></div>
+        <div id="freeStatus" class="hint" style="color:var(--stage-muted)">Lit le texte prononcé, calculé sur ton ordinateur. Au premier usage, la voix se télécharge une fois (${esc((FREE_VOICES.find((fv) => fv.key === (sc.props.freeVoice || FREE_VOICES[0].key)) || FREE_VOICES[0]).size)}), ensuite c’est instantané.</div>
+      </div>
     </div></div>`;
   }
   if (f.type === 'text') return `<label class="field"><span>${esc(f.label)}</span><input data-k="${f.k}" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}"></label>`;
@@ -1460,6 +1491,27 @@ function onEdClick(e) {
     setPlaying(false); vo.el.currentTime = 0; vo.el.play(); b.innerHTML = ic('pause');
     vo.el.onended = () => { b.innerHTML = ic('play'); };
   }
+  else if (a === 'freeVoice' && s) {
+    const text = (s.props.script || '').trim(); if (!text) return toast('Écris d’abord le texte prononcé.');
+    const sid = s.id, key = s.props.freeVoice || FREE_VOICES[0].key, speed = s.props.freeSpeed || 1;
+    b.disabled = true; b.innerHTML = '<span class="spinner"></span>Génération…';
+    const st = $('#freeStatus');
+    const t0 = performance.now();
+    freeTts(text, key, speed, (p) => {
+      const el = $('#freeStatus'); if (!el) return;
+      el.textContent = p.phase === 'download' ? `Téléchargement de la voix, ${Math.round(p.ratio * 100)} %. Ça n’arrive qu’une fois.` : 'Synthèse de la voix…';
+    }).then(async (blob) => {
+      const wav = await toWav(blob);
+      const fv = FREE_VOICES.find((x) => x.key === key);
+      await storeVoice(sid, wav, `voix-gratuite-${(fv?.label || 'piper').split(',')[0].toLowerCase()}`);
+      const el = $('#freeStatus'); if (el) el.textContent = `Voix générée en ${Math.max(1, Math.round((performance.now() - t0) / 1000))} s. Crédit : ${fv?.credit}.`;
+    }).catch((err) => {
+      console.error(err);
+      toast('La voix gratuite n’a pas pu être générée. Vérifie ta connexion au premier usage, puis réessaie.', 'error');
+      const el = $('#freeStatus'); if (el) el.textContent = `Échec : ${err.message || err}`;
+      const btn = $('[data-ed="freeVoice"]'); if (btn) { btn.disabled = false; btn.innerHTML = `${ic('play')}Générer`; }
+    });
+  }
   else if (a === 'ttsVoice' && s) startJob(s, 'voiceJob', { model: 'tts', text: s.props.script, voice: s.props.ttsVoice || 'Aria' });
   else if (a === 'genVideo' && s) {
     const vo = ed.assets.voices?.[s.props.voice]; if (!vo) return;
@@ -1479,6 +1531,8 @@ function onEdClick(e) {
 function onInspector(e) {
   const el = e.target, s = curScene();
   if (el.dataset.ttsVoice !== undefined) { if (s) { s.props.ttsVoice = el.value; changed(); } return; }
+  if (el.dataset.freeVoice !== undefined) { if (s && e.type === 'change') { s.props.freeVoice = el.value; changed(); const fv = FREE_VOICES.find((x) => x.key === el.value); const st = $('#freeStatus'); if (st && fv) st.textContent = `Voix ${fv.label}. Téléchargement unique au premier usage : ${fv.size}.`; } return; }
+  if (el.dataset.freeSpeed !== undefined) { if (s) { s.props.freeSpeed = +el.value; $('#freeSpeedOut').textContent = `×${(+el.value).toFixed(2).replace('.', ',')}`; if (e.type === 'change') changed(); } return; }
   if (el.dataset.textscale) {
     if (e.type === 'change') return;
     const sc = el.dataset.scope; if (sc === 'scene' && !s) return;

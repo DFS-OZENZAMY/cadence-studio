@@ -1,0 +1,10 @@
+Synthèse vocale gratuite dans le navigateur
+- @mintplex-labs/piper-tts-web 1.0.5 — licence MIT (https://github.com/Mintplex-Labs/piper-tts-web)
+- @diffusionstudio/piper-wasm 1.0.0 (piper_phonemize, espeak-ng data) — voir https://github.com/diffusionstudio/piper-wasm
+- onnxruntime-web 1.18.0 — licence MIT (https://github.com/microsoft/onnxruntime)
+- Piper — licence MIT (https://github.com/rhasspy/piper)
+
+Voix françaises proposées (téléchargées à la demande depuis Hugging Face via le serveur Cadence) :
+- fr_FR-siwis : jeu de données SIWIS, licence CC BY 4.0 — mention de la source requise
+- fr_FR-upmc (Jessica, Pierre) : jeu de données UPMC, licence CC BY-SA 4.0 — mention de la source requise
+- fr_FR-gilles : licence CC0 (domaine public)
