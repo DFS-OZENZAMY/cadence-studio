@@ -1,7 +1,7 @@
 /* Cadence — application */
 import * as V from './engine.js';
 import { drawCharacter, SKINS, FURS, HAIR_COLORS, EYE_COLORS, OUTFIT_COLORS, OPTIONS, PRESETS, DEFAULT_CHAR, normChar, randomChar } from './avatar.js';
-const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND } = V;
+const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND, DOMAINS } = V;
 
 /* =========================================================
    Utilitaires
@@ -173,9 +173,24 @@ function sizeCanvas(c, aspect, maxW = 1280) {
   c.width = Math.min(maxW, Math.round(w * dpr));
   c.height = Math.round(c.width / aspect);
 }
+function demoize(s) {
+  if (s.type === 'image' || s.type === 'fiche') s.props.image ||= 'demo';
+  if (s.type === 'avantapres') s.props.after ||= 'demo';
+  return s;
+}
+const domainCounts = () => Object.values(TEMPLATES).reduce((a, t) => ({ ...a, [t.domain]: (a[t.domain] || 0) + 1 }), {});
+function domainChips(cur) {
+  const c = domainCounts();
+  return `<div class="chips domain-chips"><button type="button" class="chip ${cur === 'all' ? 'on' : ''}" data-domain="all">Tous <span class="count">${Object.keys(TEMPLATES).length}</span></button>${Object.entries(DOMAINS).filter(([k]) => c[k]).map(([k, l]) => `<button type="button" class="chip ${cur === k ? 'on' : ''}" data-domain="${k}">${esc(l)} <span class="count">${c[k]}</span></button>`).join('')}</div>`;
+}
+function tplCard(k, t, attrs = '') {
+  const tl = V.timeline({ scenes: t.scenes() });
+  return `<button class="tpl-card" data-hover data-tpl="${k}" ${attrs}><div class="thumb"><canvas></canvas><span class="badge fmt">${esc(DOMAINS[t.domain] || '')}</span><span class="badge dur">${fmtDur(tl.total)}</span></div>
+    <div class="card-body"><strong>${esc(t.label)}</strong><span class="card-meta">${esc(t.hint)}, ${plural(tl.items.length, 'scène', 'scènes')}</span></div></button>`;
+}
 function previewProject(tplKey) {
   const scenes = TEMPLATES[tplKey].scenes();
-  scenes.forEach((s, i) => { s.id = `${tplKey}-${i}`; if (s.type === 'image') s.props.image = 'demo'; });
+  scenes.forEach((s, i) => { s.id = `${tplKey}-${i}`; demoize(s); });
   return { scenes, fadeOut: false };
 }
 const lives = new Set();
@@ -359,16 +374,16 @@ function projectCard(p) {
 }
 
 function newVideoDialog(preset = null) {
-  const st = { tpl: preset || 'lancement', client: state.filter !== 'all' && state.filter !== 'none' ? state.filter : (state.clients[0]?.id || ''), format: '16:9', step: preset ? 2 : 1 };
+  const st = { domain: preset ? TEMPLATES[preset].domain : (state.tplDomain || 'all'), tpl: preset || 'lancement', client: state.filter !== 'all' && state.filter !== 'none' ? state.filter : (state.clients[0]?.id || ''), format: '16:9', step: preset ? 2 : 1 };
   const draw = () => {
     if (st.step === 1) {
       modal.innerHTML = `<div class="dlg">
-        <div class="dlg-head"><div><h2>Choisis un modèle</h2><p>Survole un modèle pour le voir s’animer. Tout reste modifiable ensuite.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
-        <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">${Object.entries(TEMPLATES).map(([k, t]) => `
-          <button class="tpl-card" data-hover data-tpl="${k}" aria-pressed="${st.tpl === k}"><div class="thumb"><canvas></canvas></div>
-          <div class="card-body"><strong>${esc(t.label)}</strong><span class="card-meta">${esc(t.hint)}</span></div></button>`).join('')}</div>
+        <div class="dlg-head"><div><h2>Choisis un modèle</h2><p>Filtre par secteur, survole pour voir l’animation. Tout reste modifiable ensuite.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+        ${domainChips(st.domain)}
+        <div class="grid tpl-scroll" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">${Object.entries(TEMPLATES).filter(([, t]) => st.domain === 'all' || t.domain === st.domain).map(([k, t]) => tplCard(k, t, `aria-pressed="${st.tpl === k}"`)).join('')}</div>
         <div class="dlg-foot"><div class="steps-ind"><i class="on"></i><i></i></div><span class="spacer"></span><button class="btn" data-close>Annuler</button><button class="btn primary" data-next>Continuer</button></div></div>`;
       mountTplPreviews(modal, st.client);
+      $$('[data-domain]', modal).forEach((b) => b.addEventListener('click', () => { st.domain = b.dataset.domain; const first = Object.entries(TEMPLATES).find(([, t]) => st.domain === 'all' || t.domain === st.domain); if (first && st.domain !== 'all' && TEMPLATES[st.tpl].domain !== st.domain) st.tpl = first[0]; draw(); }));
       $$('[data-tpl]', modal).forEach((b) => b.addEventListener('click', () => { st.tpl = b.dataset.tpl; $$('[data-tpl]', modal).forEach((x) => x.setAttribute('aria-pressed', x === b)); }));
       $$('[data-tpl]', modal).forEach((b) => b.addEventListener('dblclick', () => { st.step = 2; draw(); }));
       $('[data-next]', modal).addEventListener('click', () => { st.step = 2; draw(); });
@@ -832,14 +847,17 @@ function photoAvatarDialog(id = null, onSaved) {
 /* =========================================================
    Page : Modèles
    ========================================================= */
-PAGES.modeles = () => `
-  <header class="page-head"><div><h1>Modèles</h1><p class="sub">Des structures de vidéo éprouvées. Survole pour voir l’animation${state.clients[0] ? ` aux couleurs de ${esc(state.clients[0].name)}` : ''}.</p></div></header>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">${Object.entries(TEMPLATES).map(([k, t]) => {
-    const tl = V.timeline({ scenes: t.scenes() });
-    return `<button class="tpl-card" data-hover data-tpl="${k}" data-act="useTpl"><div class="thumb"><canvas></canvas><span class="badge dur">${fmtDur(tl.total)}</span></div>
-      <div class="card-body"><strong>${esc(t.label)}</strong><span class="card-meta">${esc(t.hint)}, ${plural(tl.items.length, 'scène', 'scènes')}</span></div></button>`;
-  }).join('')}</div>`;
-AFTER.modeles = () => mountTplPreviews($('#view'), state.clients[0]?.id);
+PAGES.modeles = () => {
+  const d = state.tplDomain || 'all';
+  const list = Object.entries(TEMPLATES).filter(([, t]) => d === 'all' || t.domain === d);
+  return `<header class="page-head"><div><h1>Modèles</h1><p class="sub">${Object.keys(TEMPLATES).length} structures de vidéo, classées par secteur. Survole pour voir l’animation${state.clients[0] ? ` aux couleurs de ${esc(state.clients[0].name)}` : ''}.</p></div></header>
+  <div class="toolbar">${domainChips(d)}</div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))">${list.map(([k, t]) => tplCard(k, t, 'data-act="useTpl"')).join('')}</div>`;
+};
+AFTER.modeles = () => {
+  $$('[data-domain]').forEach((b) => b.addEventListener('click', () => { state.tplDomain = b.dataset.domain; route(); }));
+  mountTplPreviews($('#view'), state.clients[0]?.id);
+};
 
 /* =========================================================
    Page : Exports
@@ -1545,8 +1563,7 @@ function sceneDialog() {
     size: 'wide',
     onMount: (m) => {
       $$('[data-scene]', m).forEach((b) => {
-        const sc = V.newScene(b.dataset.scene); sc.id = `pick-${b.dataset.scene}`;
-        if (sc.type === 'image') sc.props.image = 'demo';
+        const sc = demoize(V.newScene(b.dataset.scene)); sc.id = `pick-${b.dataset.scene}`;
         const assets = { ...ed.assets, images: { ...ed.assets.images, demo: getDemoImage() } };
         live(b.querySelector('canvas'), { project: { scenes: [sc], fadeOut: false }, brand: ed.brand, assets, hoverOnly: true, hero: Math.min(sc.duration * 0.62, 2.6) });
         b.addEventListener('click', () => {

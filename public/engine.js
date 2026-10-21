@@ -650,6 +650,269 @@ export const SCENES = {
     },
   },
 
+  offre: {
+    label: 'Offre et prix', hint: 'Prix, prix barré, badge et avantages', bg: 'sombre', duration: 5,
+    fields: [
+      { k: 'kicker', type: 'text', label: 'Surtitre', placeholder: 'Offre du moment' },
+      { k: 'product', type: 'text', label: 'Produit ou formule' },
+      { k: 'price', type: 'text', label: 'Prix', placeholder: '29,90 €' },
+      { k: 'oldPrice', type: 'text', label: 'Ancien prix (barré)', placeholder: 'Facultatif' },
+      { k: 'unit', type: 'text', label: 'Unité', placeholder: '/ mois, / personne…' },
+      { k: 'badge', type: 'text', label: 'Badge', placeholder: '-25 %, Nouveau…' },
+      { k: 'items', type: 'items', label: 'Inclus', max: 4, add: 'Ajouter un avantage', item: [{ k: 'text', label: 'Texte', placeholder: 'Sans engagement' }] },
+      { k: 'image', type: 'image', label: 'Image (facultative)' },
+    ],
+    defaults: { kicker: 'Offre du moment', product: 'Formule découverte', price: '29,90 €', oldPrice: '39,90 €', unit: '', badge: '-25 %', items: [{ text: 'Sans engagement' }, { text: 'Satisfait ou remboursé' }], image: '' },
+    draw(S) {
+      const { ctx, W, H, u, t, d, p, pal, F } = S;
+      const P = pad(S);
+      const img = p.image && S.assets?.images?.[p.image];
+      const side = img && !S.portrait;
+      if (img) {
+        const k = E.inOutCubic(clamp(t / d));
+        const ix = P * 0.7, iy = S.portrait ? P * 0.7 : P * 0.7, iw = side ? W * 0.5 - P : W - P * 1.4, ih = side ? H - P * 1.4 : H * 0.4;
+        ctx.save(); ctx.globalAlpha *= prog(t, 0, 0.5); rrect(ctx, ix, iy, iw, ih, 30 * u); ctx.clip();
+        coverDraw(ctx, img, ix, iy, iw, ih, 0.5, 1.04 + 0.08 * k); ctx.restore();
+      }
+      const cw = side ? W * 0.5 - P * 1.2 : Math.min(W - P * 2, 980 * u);
+      const cx = side ? W * 0.5 + P * 0.2 : (W - cw) / 2;
+      const inner = cw - 100 * u;
+      const K = p.kicker ? 70 * u : 0;
+      const T = fit(S, p.product || '', { size: (S.portrait ? 84 : 76) * u, maxW: inner, maxLines: 2 });
+      const PR = fit(S, p.price || '', { size: (S.portrait ? 190 : 170) * u, maxW: inner * 0.82, maxLines: 1, min: 0.25 });
+      const items = (p.items || []).filter((i) => i.text).slice(0, 4);
+      const rows = items.map((it) => fit(S, it.text, { display: false, size: 38 * u, maxW: inner - 50 * u, maxLines: 1, min: 0.6 }));
+      const ch = 60 * u + K + T.lines.length * T.size * 1.08 + 40 * u + PR.size * 1.1 + (p.oldPrice ? 50 * u : 0) + (rows.length ? 40 * u + rows.length * 58 * u : 0) + 50 * u;
+      const top = side ? (H - ch) / 2 : img ? H * 0.4 + P * 1.2 : (H - ch) / 2;
+      const cy = Math.min(top, H - ch - P * 0.6);
+      const ep = E.outCubic(prog(t, 0.1, 0.7));
+      ctx.save(); ctx.globalAlpha *= ep; ctx.translate(0, (1 - ep) * 50 * u);
+      ctx.fillStyle = mix(pal.base, pal.fg, pal.dark ? 0.08 : 0.04); ctx.shadowColor = 'rgba(0,0,0,.3)'; ctx.shadowBlur = 60 * u; ctx.shadowOffsetY = 24 * u;
+      rrect(ctx, cx, cy, cw, ch, 34 * u); ctx.fill(); ctx.shadowColor = 'transparent';
+      ctx.strokeStyle = rgba(pal.fg, 0.12); ctx.lineWidth = 2 * u; rrect(ctx, cx, cy, cw, ch, 34 * u); ctx.stroke();
+      ctx.restore();
+      const x = cx + 50 * u; let y = cy + 60 * u;
+      if (K) { kicker(S, p.kicker, x, y - 20 * u, { start: 0.3, color: pal.accent }); y += K; }
+      y += revealLines(S, T, x, y, { start: 0.35, color: pal.fg }) + 40 * u;
+      if (p.oldPrice) {
+        const op = E.outCubic(prog(t, 0.6, 0.5));
+        setFont(ctx, F.body, 600, 44 * u); setTrack(ctx, 0);
+        ctx.save(); ctx.globalAlpha *= op; ctx.fillStyle = pal.muted; ctx.textAlign = 'left'; ctx.fillText(p.oldPrice, x, y + 36 * u);
+        const ow = ctx.measureText(p.oldPrice).width, sp = E.outExpo(prog(t, 0.9, 0.5));
+        ctx.strokeStyle = S.b.colors.secondary; ctx.lineWidth = 5 * u; ctx.beginPath(); ctx.moveTo(x - 6 * u, y + 22 * u); ctx.lineTo(x - 6 * u + (ow + 12 * u) * sp, y + 18 * u); ctx.stroke();
+        ctx.restore(); y += 50 * u;
+      }
+      const pp = E.outBack(prog(t, 0.95, 0.7));
+      if (pp > 0) {
+        useFit(S, PR); const pw = ctx.measureText(PR.lines[0]).width;
+        ctx.save(); ctx.translate(x, y + PR.size * 0.9); ctx.scale(pp, pp); ctx.fillStyle = pal.accent; ctx.textAlign = 'left'; ctx.fillText(PR.lines[0], 0, 0); ctx.restore();
+        if (p.unit) { setFont(ctx, F.body, 600, 40 * u); ctx.fillStyle = pal.muted; ctx.globalAlpha = clamp(pp); ctx.fillText(p.unit, x + pw + 16 * u, y + PR.size * 0.9); ctx.globalAlpha = 1; }
+      }
+      y += PR.size * 1.1 + 40 * u;
+      rows.forEach((R, i) => {
+        const q = E.outCubic(prog(t, 1.3 + i * 0.18, 0.5)); if (q <= 0) return;
+        ctx.save(); ctx.globalAlpha *= q; ctx.translate((1 - q) * 30 * u, 0);
+        ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.arc(x + 14 * u, y + i * 58 * u + 20 * u, 14 * u, 0, 6.283); ctx.fill();
+        ctx.strokeStyle = onColor(pal.accent); ctx.lineWidth = 4 * u; ctx.beginPath(); ctx.moveTo(x + 7 * u, y + i * 58 * u + 20 * u); ctx.lineTo(x + 12 * u, y + i * 58 * u + 26 * u); ctx.lineTo(x + 21 * u, y + i * 58 * u + 14 * u); ctx.stroke();
+        useFit(S, R); ctx.fillStyle = pal.fg; ctx.textAlign = 'left'; ctx.fillText(R.lines[0], x + 50 * u, y + i * 58 * u + 34 * u);
+        ctx.restore();
+      });
+      if (p.badge) {
+        const bp = E.outBack(prog(t, 1.15, 0.6));
+        if (bp > 0) {
+          const r = 92 * u, bx = cx + cw - r * 0.55, by = cy + r * 0.25;
+          ctx.save(); ctx.translate(bx, by); ctx.rotate(-0.22 + Math.sin(t * 2.2) * 0.04); ctx.scale(bp, bp);
+          ctx.fillStyle = S.b.colors.secondary; ctx.beginPath();
+          for (let k2 = 0; k2 < 24; k2++) { const a2 = (k2 / 24) * Math.PI * 2, rr2 = k2 % 2 ? r * 0.9 : r; ctx.lineTo(Math.cos(a2) * rr2, Math.sin(a2) * rr2); }
+          ctx.closePath(); ctx.fill();
+          let B = fit(S, p.badge, { size: 54 * u, maxW: r * 1.45, maxLines: 1, min: 0.55 });
+          if (B.size <= 54 * u * 0.55 + 0.01) B = fit(S, p.badge, { size: 48 * u, maxW: r * 1.4, maxLines: 2, min: 0.4 });
+          useFit(S, B); ctx.fillStyle = onColor(S.b.colors.secondary); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          B.lines.forEach((l, j) => ctx.fillText(l, 0, (j - (B.lines.length - 1) / 2) * B.size * 1.05));
+          ctx.restore(); ctx.textBaseline = 'alphabetic';
+        }
+      }
+    },
+  },
+
+  avantapres: {
+    label: 'Avant / Après', hint: 'Un volet qui révèle la transformation', bg: 'sombre', duration: 5,
+    fields: [
+      { k: 'before', type: 'image', label: 'Photo avant' },
+      { k: 'after', type: 'image', label: 'Photo après' },
+      { k: 'title', type: 'textarea', label: 'Légende', rows: 2 },
+      { k: 'labelBefore', type: 'text', label: 'Étiquette avant' },
+      { k: 'labelAfter', type: 'text', label: 'Étiquette après' },
+    ],
+    defaults: { before: '', after: '', title: 'Le résultat parle de lui-même', labelBefore: 'Avant', labelAfter: 'Après' },
+    draw(S) {
+      const { ctx, W, H, u, t, d, p, pal, F } = S;
+      const after = p.after && S.assets?.images?.[p.after];
+      const before = p.before && S.assets?.images?.[p.before];
+      const z = 1.02 + 0.04 * E.inOutCubic(clamp(t / d));
+      if (!after) {
+        ctx.strokeStyle = rgba(pal.fg, 0.35); ctx.lineWidth = 3 * u; ctx.setLineDash([16 * u, 12 * u]);
+        rrect(ctx, W * 0.1, H * 0.1, W * 0.8, H * 0.8, 30 * u); ctx.stroke(); ctx.setLineDash([]);
+        setFont(ctx, F.body, 600, 38 * u); ctx.fillStyle = rgba(pal.fg, 0.6); ctx.textAlign = 'center';
+        ctx.fillText('Ajoute les photos avant et après', W / 2, H * 0.3);
+        return;
+      }
+      coverDraw(ctx, after, 0, 0, W, H, 0.5, z);
+      const wipe = E.inOutCubic(prog(t, 0.7, 1.2));
+      const split = W * (1 - 0.5 * wipe) + (t > 1.9 ? Math.sin((t - 1.9) * 1.6) * W * 0.06 : 0);
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, split, H); ctx.clip();
+      if (before) coverDraw(ctx, before, 0, 0, W, H, 0.5, z);
+      else { if ('filter' in ctx) ctx.filter = 'grayscale(1) brightness(0.82) contrast(0.9)'; coverDraw(ctx, after, 0, 0, W, H, 0.5, z); ctx.filter = 'none'; }
+      ctx.restore();
+      if (wipe > 0 && split < W) {
+        ctx.fillStyle = '#FFFFFF'; ctx.fillRect(split - 3 * u, 0, 6 * u, H);
+        const hy = H * 0.5, hr = 38 * u;
+        ctx.beginPath(); ctx.arc(split, hy, hr, 0, 6.283); ctx.fill();
+        ctx.strokeStyle = '#111'; ctx.lineWidth = 5 * u; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.beginPath(); ctx.moveTo(split - 8 * u, hy - 12 * u); ctx.lineTo(split - 18 * u, hy); ctx.lineTo(split - 8 * u, hy + 12 * u);
+        ctx.moveTo(split + 8 * u, hy - 12 * u); ctx.lineTo(split + 18 * u, hy); ctx.lineTo(split + 8 * u, hy + 12 * u); ctx.stroke();
+      }
+      const pill = (txt, x, y, align, q) => {
+        if (!txt || q <= 0) return;
+        setFont(ctx, F.body, 800, 30 * u); setTrack(ctx, 3 * u);
+        const tw = ctx.measureText(txt.toUpperCase()).width + 44 * u, bx = align === 'left' ? x : x - tw;
+        ctx.save(); ctx.globalAlpha *= q; ctx.fillStyle = 'rgba(0,0,0,.6)'; rrect(ctx, bx, y, tw, 58 * u, 29 * u); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.fillText(txt.toUpperCase(), bx + 22 * u, y + 39 * u); ctx.restore(); setTrack(ctx, 0);
+      };
+      const P = pad(S);
+      pill(p.labelBefore, P * 0.6, P * 0.6, 'left', E.outCubic(prog(t, 0.3, 0.5)));
+      pill(p.labelAfter, W - P * 0.6, P * 0.6, 'right', E.outCubic(prog(t, 1.2, 0.5)));
+      if (p.title) {
+        const g = ctx.createLinearGradient(0, H * 0.55, 0, H); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.75)');
+        ctx.fillStyle = g; ctx.fillRect(0, H * 0.55, W, H * 0.45);
+        const T = fit(S, p.title, { size: (S.portrait ? 92 : 84) * u, maxW: W - P * 2, maxLines: 2 });
+        revealLines(S, T, W / 2, H - P - T.lines.length * T.size * 1.08, { align: 'center', start: 1.4, color: '#FFFFFF' });
+      }
+    },
+  },
+
+  fiche: {
+    label: 'Fiche', hint: 'Photo et caractéristiques : bien, produit, véhicule', bg: 'clair', duration: 6,
+    fields: [
+      { k: 'image', type: 'image', label: 'Photo' },
+      { k: 'subtitle', type: 'text', label: 'Surtitre', placeholder: 'Lieu, catégorie…' },
+      { k: 'title', type: 'textarea', label: 'Titre', rows: 2 },
+      { k: 'price', type: 'text', label: 'Prix', placeholder: 'Facultatif' },
+      { k: 'items', type: 'items', label: 'Caractéristiques', max: 4, add: 'Ajouter une caractéristique', item: [{ k: 'value', label: 'Valeur', placeholder: '98 m²' }, { k: 'label', label: 'Libellé', placeholder: 'Surface' }] },
+    ],
+    defaults: { image: '', subtitle: 'Lyon 6e', title: 'Appartement lumineux avec balcon', price: '495 000 €', items: [{ value: '98 m²', label: 'Surface' }, { value: '3', label: 'Chambres' }, { value: '12 m²', label: 'Balcon' }, { value: 'B', label: 'Énergie' }] },
+    draw(S) {
+      const { ctx, W, H, u, t, d, p, pal, F } = S;
+      const P = pad(S), img = p.image && S.assets?.images?.[p.image];
+      const vertical = S.portrait || S.square;
+      const ir = vertical ? { x: P * 0.7, y: P * 0.7, w: W - P * 1.4, h: H * (S.square ? 0.4 : 0.42) } : { x: P * 0.7, y: P * 0.7, w: W * 0.52, h: H - P * 1.4 };
+      const ip = E.outCubic(prog(t, 0, 0.7));
+      ctx.save(); ctx.globalAlpha *= ip;
+      ctx.translate(ir.x + ir.w / 2, ir.y + ir.h / 2); ctx.scale(0.94 + 0.06 * ip, 0.94 + 0.06 * ip); ctx.translate(-(ir.x + ir.w / 2), -(ir.y + ir.h / 2));
+      rrect(ctx, ir.x, ir.y, ir.w, ir.h, 30 * u); ctx.clip();
+      if (img) coverDraw(ctx, img, ir.x, ir.y, ir.w, ir.h, 0.5, 1.03 + 0.07 * E.inOutCubic(clamp(t / d)));
+      else { ctx.fillStyle = mix(pal.base, pal.accent, 0.25); ctx.fillRect(ir.x, ir.y, ir.w, ir.h); setFont(ctx, F.body, 600, 32 * u); ctx.fillStyle = pal.muted; ctx.textAlign = 'center'; ctx.fillText('Ajoute une photo', ir.x + ir.w / 2, ir.y + ir.h / 2); }
+      ctx.restore();
+      const cx = vertical ? P : ir.x + ir.w + P * 0.8, cw = vertical ? W - P * 2 : W - cx - P;
+      const items = (p.items || []).filter((i) => i.value || i.label).slice(0, 4);
+      const T = fit(S, p.title || '', { size: (vertical ? 78 : 72) * u, maxW: cw, maxLines: 3 });
+      const cols = 2, gap = 20 * u, cellW = (cw - gap) / cols, cellH = 140 * u;
+      const gridH = Math.ceil(items.length / cols) * (cellH + gap);
+      const h = (p.subtitle ? 64 * u : 0) + T.lines.length * T.size * 1.08 + (p.price ? 100 * u : 30 * u) + gridH;
+      let y = vertical ? ir.y + ir.h + P * 0.7 : Math.max(P, (H - h) / 2);
+      if (p.subtitle) { kicker(S, p.subtitle, cx, y, { start: 0.4, color: pal.accent }); y += 64 * u; }
+      y += revealLines(S, T, cx, y, { start: 0.5, color: pal.fg });
+      if (p.price) {
+        const pp = E.outBack(prog(t, 0.95, 0.6));
+        setFont(ctx, F.display, F.dw, 70 * u); setTrack(ctx, 0);
+        ctx.save(); ctx.globalAlpha *= clamp(pp); ctx.fillStyle = pal.accent; ctx.textAlign = 'left'; ctx.fillText(p.price, cx, y + 80 * u); ctx.restore();
+        y += 110 * u;
+      } else y += 30 * u;
+      items.forEach((it, i) => {
+        const q = E.outBack(prog(t, 1.2 + i * 0.15, 0.55)); if (q <= 0) return;
+        const x = cx + (i % cols) * (cellW + gap), yy = y + Math.floor(i / cols) * (cellH + gap);
+        ctx.save(); ctx.translate(x + cellW / 2, yy + cellH / 2); ctx.scale(q, q); ctx.translate(-(x + cellW / 2), -(yy + cellH / 2));
+        ctx.fillStyle = mix(pal.base, pal.fg, pal.dark ? 0.1 : 0.06); rrect(ctx, x, yy, cellW, cellH, 20 * u); ctx.fill();
+        const V = fit(S, it.value || '', { size: 56 * u, maxW: cellW - 40 * u, maxLines: 1, min: 0.4 });
+        useFit(S, V); ctx.fillStyle = pal.fg; ctx.textAlign = 'left'; ctx.fillText(V.lines[0], x + 22 * u, yy + 22 * u + V.size * 0.9);
+        setFont(ctx, F.body, 600, 28 * u); setTrack(ctx, 0); ctx.fillStyle = pal.muted; ctx.fillText(it.label || '', x + 22 * u, yy + cellH - 26 * u);
+        ctx.restore();
+      });
+    },
+  },
+
+  evenement: {
+    label: 'Événement', hint: 'Calendrier animé : date, heure et lieu', bg: 'sombre', duration: 5.5,
+    fields: [
+      { k: 'kicker', type: 'text', label: 'Surtitre' },
+      { k: 'title', type: 'textarea', label: 'Nom de l’événement', rows: 2 },
+      { k: 'date', type: 'text', label: 'Date', placeholder: 'Samedi 14 décembre' },
+      { k: 'time', type: 'text', label: 'Heure', placeholder: '19 h 30' },
+      { k: 'place', type: 'text', label: 'Lieu', placeholder: 'Adresse ou « En ligne »' },
+      { k: 'button', type: 'text', label: 'Bouton', placeholder: 'Facultatif' },
+    ],
+    defaults: { kicker: 'À noter dans l’agenda', title: 'Soirée de lancement', date: 'Samedi 14 décembre', time: '19 h 30', place: 'Le Grand Atelier, Paris', button: 'Je réserve ma place' },
+    draw(S) {
+      const { ctx, W, H, u, t, p, pal, F } = S;
+      const P = pad(S), vertical = S.portrait || S.square;
+      const dateS = String(p.date || '');
+      const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+      const DAYS = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+      const low = dateS.toLowerCase();
+      const day = (dateS.match(/\b(\d{1,2})\b/) || [])[1] || '';
+      const month = MONTHS.find((m) => low.includes(m)) || '';
+      const wd = DAYS.find((x) => low.includes(x)) || '';
+      const cw = (vertical ? 420 : 400) * u, chh = cw * 1.12;
+      const cxp = vertical ? (W - cw) / 2 : P + 20 * u, cyp = vertical ? P * 1.1 : (H - chh) / 2;
+      const cp = E.outBack(prog(t, 0.1, 0.8));
+      if (cp > 0) {
+        ctx.save(); ctx.translate(cxp + cw / 2, cyp + chh / 2); ctx.rotate(-0.06 * cp + Math.sin(t * 1.4) * 0.008); ctx.scale(cp, cp); ctx.translate(-cw / 2, -chh / 2);
+        ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 60 * u; ctx.shadowOffsetY = 26 * u;
+        ctx.fillStyle = '#FFFFFF'; rrect(ctx, 0, 0, cw, chh, 34 * u); ctx.fill(); ctx.shadowColor = 'transparent';
+        ctx.save(); rrect(ctx, 0, 0, cw, chh, 34 * u); ctx.clip(); ctx.fillStyle = pal.accent; ctx.fillRect(0, 0, cw, chh * 0.27); ctx.restore();
+        ctx.fillStyle = 'rgba(0,0,0,.25)'; for (const rx of [cw * 0.28, cw * 0.72]) { ctx.beginPath(); ctx.arc(rx, chh * 0.04, 12 * u, 0, 6.283); ctx.fill(); }
+        setFont(ctx, F.body, 800, 40 * u); setTrack(ctx, 6 * u); ctx.fillStyle = onColor(pal.accent); ctx.textAlign = 'center';
+        ctx.fillText((month || 'Agenda').toUpperCase(), cw / 2, chh * 0.18); setTrack(ctx, 0);
+        const dn = E.outExpo(prog(t, 0.5, 0.9));
+        setFont(ctx, F.display, F.dw, 230 * u); ctx.fillStyle = '#16141F';
+        ctx.save(); ctx.globalAlpha *= dn; ctx.fillText(day || '★', cw / 2, chh * 0.74 + (1 - dn) * 30 * u); ctx.restore();
+        setFont(ctx, F.body, 700, 36 * u); ctx.fillStyle = '#6A6878'; ctx.fillText(wd ? wd.charAt(0).toUpperCase() + wd.slice(1) : '', cw / 2, chh * 0.9);
+        ctx.restore();
+      }
+      const tx = vertical ? P : cxp + cw + P * 0.9, tw = vertical ? W - P * 2 : W - tx - P;
+      const T = fit(S, p.title || '', { size: (vertical ? 92 : 96) * u, maxW: tw, maxLines: 3 });
+      const rows = [['clock', p.time], ['pin', p.place], ['cal', vertical ? '' : dateS]].filter((r) => r[1]);
+      const h = (p.kicker ? 64 * u : 0) + T.lines.length * T.size * 1.08 + 40 * u + rows.length * 70 * u + (p.button ? 140 * u : 0);
+      let y = vertical ? cyp + chh + P * 0.8 : (H - h) / 2;
+      const al = vertical ? 'center' : 'left', ax = vertical ? W / 2 : tx;
+      if (p.kicker) { kicker(S, p.kicker, ax, y, { align: al, start: 0.5, color: pal.accent }); y += 64 * u; }
+      y += revealLines(S, T, ax, y, { align: al, start: 0.6, color: pal.fg }) + 40 * u;
+      rows.forEach(([icn, txt], i) => {
+        const q = E.outCubic(prog(t, 1.2 + i * 0.2, 0.5)); if (q <= 0) return;
+        setFont(ctx, F.body, 600, 42 * u); setTrack(ctx, 0);
+        const w = ctx.measureText(txt).width + 64 * u, x0 = vertical ? W / 2 - w / 2 : tx;
+        ctx.save(); ctx.globalAlpha *= q; ctx.translate((1 - q) * 30 * u, 0);
+        const ix = x0 + 20 * u, iy = y + i * 70 * u + 22 * u;
+        ctx.strokeStyle = pal.accent; ctx.fillStyle = pal.accent; ctx.lineWidth = 5 * u; ctx.lineCap = 'round';
+        if (icn === 'clock') { ctx.beginPath(); ctx.arc(ix, iy, 18 * u, 0, 6.283); ctx.stroke(); ctx.beginPath(); ctx.moveTo(ix, iy - 10 * u); ctx.lineTo(ix, iy); ctx.lineTo(ix + 8 * u, iy + 6 * u); ctx.stroke(); }
+        else if (icn === 'pin') { ctx.beginPath(); ctx.arc(ix, iy - 6 * u, 15 * u, Math.PI, 0); ctx.lineTo(ix, iy + 20 * u); ctx.closePath(); ctx.fill(); ctx.fillStyle = pal.base; ctx.beginPath(); ctx.arc(ix, iy - 6 * u, 6 * u, 0, 6.283); ctx.fill(); }
+        else { ctx.strokeRect(ix - 17 * u, iy - 14 * u, 34 * u, 32 * u); ctx.beginPath(); ctx.moveTo(ix - 17 * u, iy - 4 * u); ctx.lineTo(ix + 17 * u, iy - 4 * u); ctx.stroke(); }
+        ctx.fillStyle = pal.fg; ctx.textAlign = 'left'; ctx.fillText(txt, x0 + 64 * u, y + i * 70 * u + 37 * u);
+        ctx.restore();
+      });
+      y += rows.length * 70 * u + 40 * u;
+      if (p.button) {
+        const bp = E.outBack(prog(t, 1.8, 0.6));
+        if (bp > 0) {
+          setFont(ctx, F.body, 700, 40 * u); setTrack(ctx, 0);
+          const bw = ctx.measureText(p.button).width + 100 * u, bh = 96 * u, bx = vertical ? W / 2 : tx + bw / 2;
+          ctx.save(); ctx.translate(bx, y + bh / 2); ctx.scale(bp, bp); ctx.fillStyle = pal.accent; rrect(ctx, -bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
+          ctx.fillStyle = onColor(pal.accent); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(p.button, 0, 2 * u); ctx.restore(); ctx.textBaseline = 'alphabetic';
+        }
+      }
+    },
+  },
+
   presentateur: {
     label: 'Présentateur', hint: 'Un avatar qui parle, avec voix et sous-titres', bg: 'sombre', duration: 8,
     fields: [
@@ -912,6 +1175,190 @@ export const TEMPLATES = {
     scenes: () => [sc('intro'), sc('final', {}, { transition: 'volet' })],
   },
 };
+/* --- Modèles par secteur --- */
+export const DOMAINS = {
+  general: 'Général', restauration: 'Restauration', immobilier: 'Immobilier', beaute: 'Beauté et bien-être', sport: 'Sport et coaching',
+  ecommerce: 'E-commerce et mode', formation: 'Formation', sante: 'Santé', tech: 'Tech et SaaS', evenementiel: 'Événementiel',
+  artisans: 'Artisans et BTP', finance: 'Finance et assurance', tourisme: 'Tourisme et hôtellerie', auto: 'Automobile',
+};
+const L = (...t) => t.map((text) => ({ text }));
+const N = (...p) => p.map(([value, label]) => ({ value, label }));
+const DOMAIN_TEMPLATES = {
+  /* Restauration */
+  'resto-plat': { domain: 'restauration', label: 'Plat du jour', hint: 'Le plat et la formule du midi', scenes: () => [
+    sc('titre', { kicker: 'Aujourd’hui à la carte', text: 'Le plat du jour est servi', highlight: 'servi' }, { duration: 3 }),
+    sc('image', { title: 'Suprême de volaille, écrasé de pommes de terre', subtitle: 'Fait maison, produits du marché', motion: 'avant' }, { transition: 'zoom' }),
+    sc('offre', { kicker: 'Formule midi', product: 'Entrée, plat, dessert', price: '18,90 €', oldPrice: '', badge: 'Fait maison', items: L('Café offert', 'Servi en 45 minutes') }, { transition: 'glisse' }),
+    sc('final', { title: 'On vous garde une table ?', button: 'Réserver' }, { transition: 'volet' }),
+  ] },
+  'resto-ouverture': { domain: 'restauration', label: 'Ouverture du restaurant', hint: 'Annoncer une ouverture ou une réouverture', scenes: () => [
+    sc('intro', { kicker: 'Grande ouverture', title: 'Une nouvelle adresse gourmande', subtitle: 'Cuisine de saison et produits locaux' }),
+    sc('evenement', { kicker: 'Soirée d’inauguration', title: 'Venez fêter l’ouverture avec nous', date: 'Vendredi 6 décembre', time: 'Dès 18 h', place: '12 rue des Halles', button: '' }, { transition: 'volet' }),
+    sc('liste', { title: 'Ce qui vous attend', items: L('Une cuisine 100 % maison', 'Des producteurs à moins de 50 km', 'Une terrasse chauffée') }, { transition: 'glisse' }),
+    sc('final', { title: 'Réservez dès maintenant', button: 'Réserver une table' }, { transition: 'zoom' }),
+  ] },
+  /* Immobilier */
+  'immo-bien': { domain: 'immobilier', label: 'Bien à vendre', hint: 'Fiche du bien, photos et visite', scenes: () => [
+    sc('intro', { kicker: 'Exclusivité', title: 'Votre futur chez-vous vous attend', subtitle: 'Découvrez ce bien en avant-première' }),
+    sc('fiche', {}, { transition: 'glisse', duration: 6.5 }),
+    sc('image', { title: 'Une pièce de vie baignée de lumière', subtitle: 'Exposition sud, vue dégagée', motion: 'gauche' }, { transition: 'zoom' }),
+    sc('presentateur', { layout: 'medaillon', side: 'droite', script: 'Ce bien ne restera pas longtemps sur le marché. Je vous le fais visiter quand vous voulez.', title: 'Visite sur rendez-vous', items: L('Disponible dès cette semaine', 'Visite virtuelle possible') }, { transition: 'volet', duration: 7 }),
+    sc('final', { title: 'Planifiez votre visite', button: 'Je visite' }, { transition: 'fondu' }),
+  ] },
+  'immo-vendu': { domain: 'immobilier', label: 'Vendu !', hint: 'Valoriser une vente réussie', scenes: () => [
+    sc('titre', { kicker: 'Mission accomplie', text: 'Vendu en 12 jours', highlight: 'Vendu' }, { duration: 3 }),
+    sc('chiffres', { title: 'Les chiffres de la vente', items: N(['12', 'jours de mise en vente'], ['3', 'offres reçues'], ['+4 %', 'au-dessus du prix estimé']).map((x) => ({ value: x.value, label: x.label })) }, { transition: 'glisse' }),
+    sc('temoignage', { quote: 'Une estimation juste, des visites qualifiées et une vente sereine. Je recommande sans hésiter.', author: 'Julien et Marie', role: 'Vendeurs à Nantes', rating: '5' }, { transition: 'volet' }),
+    sc('final', { title: 'Et votre bien, combien vaut-il ?', button: 'Estimation gratuite' }, { transition: 'zoom' }),
+  ] },
+  /* Beauté et bien-être */
+  'beaute-transfo': { domain: 'beaute', label: 'Transformation', hint: 'Avant / après et soin à la une', scenes: () => [
+    sc('titre', { kicker: 'Résultat réel', text: 'La transformation qui fait du bien', highlight: 'transformation' }, { duration: 3 }),
+    sc('avantapres', { title: 'Un soin, une nouvelle énergie' }, { transition: 'volet' }),
+    sc('offre', { kicker: 'Soin signature', product: 'Rituel éclat du visage', price: '59 €', oldPrice: '75 €', unit: '/ 1 h', badge: 'Nouveau', items: L('Diagnostic de peau offert', 'Produits naturels') }, { transition: 'glisse' }),
+    sc('final', { title: 'Offrez-vous ce moment', button: 'Prendre rendez-vous' }, { transition: 'zoom' }),
+  ] },
+  'beaute-institut': { domain: 'beaute', label: 'Présentation de l’institut', hint: 'Ambiance, soins et avis', scenes: () => [
+    sc('intro', { kicker: 'Bienvenue', title: 'Un lieu pensé pour votre bien-être', subtitle: '' }),
+    sc('image', { title: 'Un cocon de calme en plein centre-ville', subtitle: '', motion: 'avant' }, { transition: 'zoom' }),
+    sc('etapes', { title: 'Votre parcours bien-être', items: [{ label: 'Accueil', desc: 'Un thé et un échange' }, { label: 'Soin', desc: 'Adapté à vos besoins' }, { label: 'Conseils', desc: 'Pour prolonger les effets' }] }, { transition: 'glisse' }),
+    sc('temoignage', { quote: 'Je ressors à chaque fois apaisée. L’équipe est aux petits soins.', author: 'Clara', role: 'Cliente fidèle', rating: '5' }, { transition: 'volet' }),
+    sc('final', { title: 'Réservez votre parenthèse', button: 'Réserver' }, { transition: 'fondu' }),
+  ] },
+  /* Sport et coaching */
+  'sport-programme': { domain: 'sport', label: 'Programme de coaching', hint: 'Méthode, résultats et tarif', scenes: () => [
+    sc('titre', { kicker: 'Programme', text: '8 semaines pour reprendre le contrôle', highlight: '8' }, { duration: 3.5 }),
+    sc('etapes', { title: 'La méthode', items: [{ label: 'Bilan', desc: 'Forme, objectifs, rythme' }, { label: 'Entraînement', desc: '3 séances par semaine' }, { label: 'Suivi', desc: 'Ajustements chaque semaine' }] }, { transition: 'glisse' }),
+    sc('chiffres', { title: 'En moyenne, nos membres gagnent', items: N(['+40 %', 'd’endurance'], ['-5 kg', 'en 8 semaines'], ['94 %', 'vont au bout']).map((x) => ({ value: x.value, label: x.label })) }, { transition: 'zoom' }),
+    sc('offre', { kicker: 'Coaching', product: 'Programme 8 semaines', price: '49 €', unit: '/ mois', oldPrice: '', badge: '1re séance offerte', items: L('Application de suivi incluse', 'Sans engagement') }, { transition: 'volet' }),
+    sc('final', { title: 'Votre première séance est offerte', button: 'Je commence' }, { transition: 'fondu' }),
+  ] },
+  'sport-cours': { domain: 'sport', label: 'Cours collectif', hint: 'Annoncer un cours ou un stage', scenes: () => [
+    sc('evenement', { kicker: 'Nouveau cours', title: 'Cardio Boxe en plein air', date: 'Samedi 12 avril', time: '10 h', place: 'Parc de la Tête d’Or', button: '' }),
+    sc('liste', { title: 'Au programme', items: L('45 minutes intenses', 'Tous niveaux bienvenus', 'Matériel fourni') }, { transition: 'glisse' }),
+    sc('final', { title: 'Places limitées à 20 personnes', button: 'Je réserve' }, { transition: 'zoom' }),
+  ] },
+  /* E-commerce et mode */
+  'ecom-collection': { domain: 'ecommerce', label: 'Nouvelle collection', hint: 'Lancement produit et prix', scenes: () => [
+    sc('intro', { kicker: 'Nouvelle collection', title: 'Automne, en toute douceur', subtitle: 'Des matières naturelles, des coupes intemporelles' }),
+    sc('image', { title: 'Le pull en laine mérinos', subtitle: 'Tricoté au Portugal', motion: 'avant' }, { transition: 'zoom' }),
+    sc('fiche', { subtitle: 'Pull col rond', title: 'Laine mérinos extra-fine', price: '89 €', items: N(['100 %', 'Mérinos'], ['6', 'Coloris'], ['XS–XXL', 'Tailles'], ['30 j', 'Pour changer d’avis']) }, { transition: 'glisse' }),
+    sc('final', { title: 'Disponible en ligne et en boutique', button: 'Découvrir' }, { transition: 'volet' }),
+  ] },
+  'ecom-soldes': { domain: 'ecommerce', label: 'Soldes et promo flash', hint: 'Urgence, réduction et date de fin', scenes: () => [
+    sc('titre', { kicker: 'Vente flash', text: 'Jusqu’à -50 % ce week-end', highlight: '-50' }, { duration: 3 }),
+    sc('offre', { kicker: 'Coup de cœur', product: 'Sac cabas en cuir', price: '79 €', oldPrice: '159 €', badge: '-50 %', items: L('Livraison offerte', 'Retours gratuits') }, { transition: 'glisse' }),
+    sc('evenement', { kicker: 'Fin de l’offre', title: 'Plus que quelques jours', date: 'Dimanche 30 novembre', time: 'Minuit', place: 'Sur notre site', button: '' }, { transition: 'volet' }),
+    sc('final', { title: 'Ne passez pas à côté', button: 'J’en profite' }, { transition: 'zoom' }),
+  ] },
+  /* Formation */
+  'formation-programme': { domain: 'formation', label: 'Programme de formation', hint: 'Modules, résultats et inscription', scenes: () => [
+    sc('intro', { kicker: 'Formation', title: 'Maîtrisez le marketing digital en 6 semaines', subtitle: 'En ligne, à votre rythme' }),
+    sc('presentateur', { script: 'Je suis votre formatrice. En six semaines, je vous emmène de zéro à une stratégie complète, avec des cas concrets.', title: 'Ce que vous allez apprendre', items: L('Construire une stratégie', 'Créer du contenu qui convertit', 'Mesurer vos résultats') }, { transition: 'volet', duration: 9 }),
+    sc('etapes', { title: 'Le parcours', items: [{ label: 'Bases', desc: 'Semaines 1 et 2' }, { label: 'Pratique', desc: 'Semaines 3 et 4' }, { label: 'Projet', desc: 'Semaines 5 et 6' }] }, { transition: 'glisse' }),
+    sc('offre', { kicker: 'Inscription', product: 'Formation complète', price: '390 €', badge: 'Certifiante', items: L('Accès à vie', 'Accompagnement personnalisé') }, { transition: 'zoom' }),
+    sc('final', { title: 'Prochaine session le 3 février', button: 'Je m’inscris' }, { transition: 'fondu' }),
+  ] },
+  'formation-webinaire': { domain: 'formation', label: 'Webinaire', hint: 'Inviter à un événement en ligne', scenes: () => [
+    sc('evenement', { kicker: 'Webinaire gratuit', title: '5 erreurs qui freinent votre croissance', date: 'Jeudi 23 janvier', time: '12 h 30', place: 'En ligne', button: 'Je m’inscris' }),
+    sc('liste', { title: 'En 45 minutes, vous saurez', items: L('Repérer ce qui bloque', 'Prioriser vos actions', 'Passer à l’action dès le lendemain') }, { transition: 'glisse' }),
+    sc('final', { title: 'Inscription gratuite, places limitées', button: 'Réserver ma place' }, { transition: 'volet' }),
+  ] },
+  /* Santé */
+  'sante-cabinet': { domain: 'sante', label: 'Présentation du cabinet', hint: 'Équipe, soins et prise de rendez-vous', scenes: () => [
+    sc('intro', { kicker: 'Cabinet', title: 'Une équipe à votre écoute', subtitle: 'Consultations sur rendez-vous, du lundi au samedi' }),
+    sc('liste', { title: 'Nos consultations', items: L('Bilan et suivi personnalisé', 'Prise en charge des enfants', 'Téléconsultation possible') }, { transition: 'glisse' }),
+    sc('etapes', { title: 'Prendre rendez-vous', items: [{ label: 'En ligne', desc: '24 h sur 24' }, { label: 'Confirmation', desc: 'Par SMS' }, { label: 'Consultation', desc: 'Au cabinet ou à distance' }] }, { transition: 'volet' }),
+    sc('final', { title: 'Prenez rendez-vous en 1 minute', button: 'Prendre rendez-vous' }, { transition: 'fondu' }),
+  ] },
+  'sante-conseil': { domain: 'sante', label: 'Conseil prévention', hint: 'Un conseil simple, présenté par un avatar', scenes: () => [
+    sc('titre', { kicker: 'Le conseil de la semaine', text: 'Bien dormir, ça s’apprend', highlight: 'dormir' }, { duration: 3 }),
+    sc('presentateur', { layout: 'cote', script: 'Trois habitudes simples améliorent déjà beaucoup la qualité du sommeil. Les voici.', title: '3 habitudes à adopter', items: L('Des horaires réguliers', 'Pas d’écran avant de dormir', 'Une chambre fraîche') }, { transition: 'volet', duration: 8 }),
+    sc('final', { title: 'Une question ? Parlons-en en consultation', button: 'Prendre rendez-vous' }, { transition: 'fondu' }),
+  ] },
+  /* Tech et SaaS */
+  'saas-demo': { domain: 'tech', label: 'Démo produit', hint: 'Problème, solution, tarif', scenes: () => [
+    sc('titre', { kicker: 'Le problème', text: 'Vos équipes perdent 5 heures par semaine', highlight: '5' }, { duration: 3.5 }),
+    sc('presentateur', { script: 'Notre outil centralise vos tâches, vos documents et vos échanges. Tout est enfin au même endroit.', title: 'Une seule plateforme', items: L('Tâches et projets', 'Documents partagés', 'Messagerie intégrée') }, { transition: 'volet', duration: 8.5 }),
+    sc('chiffres', { title: 'Nos clients constatent', items: N(['-30 %', 'de réunions'], ['x2', 'de projets livrés à temps'], ['4,8/5', 'de satisfaction']).map((x) => ({ value: x.value, label: x.label })) }, { transition: 'glisse' }),
+    sc('offre', { kicker: 'Tarif', product: 'Offre Pro', price: '19 €', unit: '/ utilisateur / mois', badge: '14 jours offerts', items: L('Sans carte bancaire', 'Support en français') }, { transition: 'zoom' }),
+    sc('final', { title: 'Essayez gratuitement', button: 'Démarrer l’essai' }, { transition: 'fondu' }),
+  ] },
+  'saas-nouveaute': { domain: 'tech', label: 'Nouvelle fonctionnalité', hint: 'Annoncer une mise à jour', scenes: () => [
+    sc('intro', { kicker: 'Nouveauté', title: 'Les rapports automatiques sont arrivés', subtitle: 'Disponible dès aujourd’hui pour tous' }),
+    sc('liste', { title: 'Ce qui change', items: L('Un rapport chaque lundi, sans effort', 'Des graphiques prêts à partager', 'Export PDF en un clic') }, { transition: 'glisse' }),
+    sc('graphique', { title: 'Temps passé sur le reporting', unit: 'h', items: [{ label: 'Avant', value: '6' }, { label: 'Après', value: '1' }] }, { transition: 'volet' }),
+    sc('final', { title: 'Activez-les dans vos réglages', button: 'Découvrir' }, { transition: 'fondu' }),
+  ] },
+  /* Événementiel */
+  'event-invitation': { domain: 'evenementiel', label: 'Invitation', hint: 'Date, programme et réservation', scenes: () => [
+    sc('intro', { kicker: 'Vous êtes invités', title: 'La soirée de l’année approche', subtitle: '' }),
+    sc('evenement', {}, { transition: 'volet', duration: 6 }),
+    sc('etapes', { title: 'Le programme', items: [{ label: '19 h 30', desc: 'Accueil et cocktail' }, { label: '20 h 30', desc: 'Conférence' }, { label: '22 h', desc: 'Soirée dansante' }] }, { transition: 'glisse' }),
+    sc('final', { title: 'Confirmez votre présence', button: 'Je réserve ma place' }, { transition: 'zoom' }),
+  ] },
+  'event-bilan': { domain: 'evenementiel', label: 'Retour sur l’événement', hint: 'Remercier et partager les temps forts', scenes: () => [
+    sc('titre', { kicker: 'Merci', text: 'Quelle soirée !', highlight: 'soirée' }, { duration: 3 }),
+    sc('chiffres', { title: 'L’édition 2026 en chiffres', items: N(['850', 'participants'], ['24', 'intervenants'], ['98 %', 'veulent revenir']).map((x) => ({ value: x.value, label: x.label })) }, { transition: 'glisse' }),
+    sc('image', { title: 'Merci à toutes et à tous', subtitle: 'Rendez-vous l’année prochaine', motion: 'arriere' }, { transition: 'zoom' }),
+    sc('final', { title: 'Restez informés de la prochaine édition', button: 'S’abonner' }, { transition: 'volet' }),
+  ] },
+  /* Artisans et BTP */
+  'btp-chantier': { domain: 'artisans', label: 'Chantier réalisé', hint: 'Avant / après et devis', scenes: () => [
+    sc('titre', { kicker: 'Rénovation', text: 'Une cuisine transformée en 3 semaines', highlight: '3' }, { duration: 3.5 }),
+    sc('avantapres', { title: 'Rénovation complète, livrée dans les délais' }, { transition: 'volet' }),
+    sc('etapes', { title: 'Comment nous travaillons', items: [{ label: 'Visite', desc: 'Gratuite, sous 48 h' }, { label: 'Devis', desc: 'Clair et détaillé' }, { label: 'Chantier', desc: 'Propre et suivi' }] }, { transition: 'glisse' }),
+    sc('chiffres', { title: 'Notre expérience', items: N(['25 ans', 'de métier'], ['600', 'chantiers'], ['10 ans', 'de garantie']).map((x) => ({ value: x.value, label: x.label })) }, { transition: 'zoom' }),
+    sc('final', { title: 'Votre projet mérite le meilleur', button: 'Devis gratuit' }, { transition: 'fondu' }),
+  ] },
+  'artisan-savoirfaire': { domain: 'artisans', label: 'Savoir-faire', hint: 'Raconter le métier et la qualité', scenes: () => [
+    sc('intro', { kicker: 'Fait main', title: 'Le geste juste, depuis trois générations', subtitle: '' }),
+    sc('image', { title: 'Chaque pièce est unique', subtitle: 'Façonnée dans notre atelier', motion: 'avant' }, { transition: 'zoom' }),
+    sc('liste', { title: 'Nos engagements', items: L('Des matériaux locaux et durables', 'Un travail 100 % artisanal', 'Une réparation à vie') }, { transition: 'glisse' }),
+    sc('temoignage', { quote: 'Un travail d’une précision remarquable, et un accueil chaleureux à l’atelier.', author: 'Thomas', role: 'Client', rating: '5' }, { transition: 'volet' }),
+    sc('final', { title: 'Venez nous rencontrer à l’atelier', button: 'Nous contacter' }, { transition: 'fondu' }),
+  ] },
+  /* Finance et assurance */
+  'finance-epargne': { domain: 'finance', label: 'Offre d’épargne', hint: 'Pédagogie, graphique et conseiller', scenes: () => [
+    sc('titre', { kicker: 'Épargne', text: 'Faites travailler votre argent', highlight: 'travailler' }, { duration: 3 }),
+    sc('graphique', { title: 'Exemple : 100 € par mois', unit: 'k€', items: [{ label: '5 ans', value: '6,6' }, { label: '10 ans', value: '14' }, { label: '15 ans', value: '22,5' }, { label: '20 ans', value: '32' }] }, { transition: 'glisse' }),
+    sc('presentateur', { layout: 'cote', script: 'Ces chiffres sont des exemples, pas une promesse. Je vous aide à construire une épargne adaptée à votre situation.', title: 'Un conseiller dédié', items: L('Bilan gratuit', 'Sans engagement') }, { transition: 'volet', duration: 8 }),
+    sc('final', { title: 'Parlons de vos projets', button: 'Prendre rendez-vous' }, { transition: 'fondu' }),
+  ] },
+  'assurance-simple': { domain: 'finance', label: 'Assurance simplifiée', hint: 'Souscription en quelques étapes', scenes: () => [
+    sc('intro', { kicker: 'Assurance habitation', title: 'Assuré en 3 minutes, vraiment', subtitle: '' }),
+    sc('etapes', { title: 'Comment ça marche', items: [{ label: 'Devis', desc: 'En ligne, immédiat' }, { label: 'Signature', desc: 'Électronique' }, { label: 'Attestation', desc: 'Reçue par e-mail' }] }, { transition: 'glisse' }),
+    sc('offre', { kicker: 'À partir de', product: 'Assurance habitation', price: '6 €', unit: '/ mois', badge: '1er mois offert', items: L('Résiliable à tout moment', 'Assistance 24 h sur 24') }, { transition: 'volet' }),
+    sc('final', { title: 'Obtenez votre devis', button: 'Faire un devis' }, { transition: 'zoom' }),
+  ] },
+  /* Tourisme et hôtellerie */
+  'tourisme-sejour': { domain: 'tourisme', label: 'Séjour à la une', hint: 'Destination, fiche et prix', scenes: () => [
+    sc('intro', { kicker: 'Évasion', title: 'Une semaine au bout du monde', subtitle: 'Soleil, plages et nature préservée' }),
+    sc('image', { title: 'Des eaux turquoise à perte de vue', subtitle: '', motion: 'gauche' }, { transition: 'zoom' }),
+    sc('fiche', { subtitle: 'Séjour tout compris', title: 'Hôtel 4 étoiles en bord de mer', price: 'Dès 890 €', items: N(['7', 'Nuits'], ['✈', 'Vol inclus'], ['Pension', 'Complète'], ['4,7/5', 'Avis']) }, { transition: 'glisse' }),
+    sc('final', { title: 'Réservez avant le 31 mars', button: 'Voir les dates' }, { transition: 'volet' }),
+  ] },
+  'hotel-offre': { domain: 'tourisme', label: 'Offre de l’hôtel', hint: 'Week-end, prestations et réservation', scenes: () => [
+    sc('titre', { kicker: 'Week-end', text: 'Offrez-vous une vraie pause', highlight: 'pause' }, { duration: 3 }),
+    sc('liste', { title: 'Votre séjour comprend', items: L('Une nuit en chambre supérieure', 'Le petit-déjeuner gourmand', 'L’accès au spa') }, { transition: 'glisse' }),
+    sc('offre', { kicker: 'Offre spéciale', product: 'Escapade bien-être pour deux', price: '219 €', oldPrice: '269 €', badge: 'Week-end', items: L('Départ tardif offert') }, { transition: 'volet' }),
+    sc('final', { title: 'Réservez votre escapade', button: 'Réserver' }, { transition: 'zoom' }),
+  ] },
+  /* Automobile */
+  'auto-vehicule': { domain: 'auto', label: 'Véhicule à la vente', hint: 'Fiche technique, prix et essai', scenes: () => [
+    sc('intro', { kicker: 'Arrivage', title: 'Disponible dès maintenant en concession', subtitle: '' }),
+    sc('fiche', { subtitle: 'Occasion récente', title: 'SUV hybride, première main', price: '27 900 €', items: N(['2023', 'Année'], ['18 500 km', 'Kilométrage'], ['Hybride', 'Motorisation'], ['Auto', 'Boîte']) }, { transition: 'glisse', duration: 6.5 }),
+    sc('liste', { title: 'Inclus', items: L('Garantie 12 mois', 'Révision effectuée', 'Reprise de votre véhicule') }, { transition: 'volet' }),
+    sc('final', { title: 'Venez l’essayer', button: 'Réserver un essai' }, { transition: 'zoom' }),
+  ] },
+  'auto-entretien': { domain: 'auto', label: 'Offre d’entretien', hint: 'Révision, prix et rendez-vous', scenes: () => [
+    sc('titre', { kicker: 'Atelier', text: 'Votre voiture mérite un check-up', highlight: 'check-up' }, { duration: 3 }),
+    sc('offre', { kicker: 'Forfait', product: 'Révision complète', price: '149 €', oldPrice: '189 €', badge: 'Ce mois-ci', items: L('Vidange et filtres', 'Contrôle 40 points', 'Véhicule de prêt') }, { transition: 'glisse' }),
+    sc('final', { title: 'Prenez rendez-vous en ligne', button: 'Prendre rendez-vous' }, { transition: 'volet' }),
+  ] },
+};
+for (const t of Object.values(TEMPLATES)) t.domain ||= 'general';
+Object.assign(TEMPLATES, DOMAIN_TEMPLATES);
 export const newScene = (type) => sc(type);
 
 /* ---------------------------------------------------------------

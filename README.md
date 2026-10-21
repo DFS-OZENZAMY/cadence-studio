@@ -5,8 +5,8 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
 ## Ce que fait la plateforme
 
 - **Clients et chartes graphiques** : logo, 4 couleurs (extraites automatiquement du logo), 5 typographies, 3 ambiances de fond. Chaque vidéo du client reprend sa charte.
-- **6 modèles de vidéos** : lancement de produit, offre promotionnelle, témoignage client, présentation d’entreprise, résultats et chiffres, projet vierge.
-- **9 scènes animées** : ouverture avec logo, titre choc (mots qui apparaissent un à un), chiffres clés (compteurs), points forts (liste cochée), témoignage, image plein écran (zoom lent), graphique en barres, étapes, appel à l’action.
+- **33 modèles de vidéos, classés en 13 secteurs** : restauration, immobilier, beauté et bien-être, sport et coaching, e-commerce et mode, formation, santé, tech et SaaS, événementiel, artisans et BTP, finance et assurance, tourisme et hôtellerie, automobile, plus les modèles généraux.
+- **14 scènes animées** : ouverture avec logo, titre choc, chiffres clés, points forts, témoignage, image plein écran, graphique, étapes, appel à l’action, présentateur, offre et prix (prix barré, badge), avant / après (volet glissant), fiche (bien, produit, véhicule) et événement (calendrier animé).
 - **Éditeur** : aperçu en direct, pellicule de scènes réorganisable par glisser-déposer, inspecteur, 5 transitions, annuler/rétablir, enregistrement automatique, raccourcis clavier.
 - **4 formats** : 16:9 (YouTube), 9:16 (Reels, TikTok), 1:1 et 4:5 (feeds). Un clic pour passer de l’un à l’autre.
 - **Export MP4** : de 720p à 4K, 30 ou 60 images/s, avec musique en option (fondu automatique), plusieurs formats en une fois.
