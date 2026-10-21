@@ -1611,6 +1611,7 @@ function renderInspector() {
       <div class="field"><span>Durée</span><div class="range-row"><input type="range" min="1.5" max="${s.type === 'presentateur' ? 60 : 15}" step="0.5" value="${s.duration}" data-common="duration" aria-label="Durée en secondes"><output id="durOut">${(+s.duration).toFixed(1).replace('.', ',')} s</output></div></div>
       <label class="field"><span>Transition d’entrée</span><select data-common="transition" ${ed.sel === 0 ? 'disabled' : ''}>${Object.entries(TRANSITIONS).map(([k, l]) => `<option value="${k}" ${s.transition === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="field"><span>Fond</span><select data-common="bg">${Object.entries(BACKGROUNDS).map(([k, l]) => `<option value="${k}" ${(s.bg || 'auto') === k ? 'selected' : ''}>${l}${k === 'auto' ? ` (${esc(BACKGROUNDS[def.bg].toLowerCase())})` : ''}</option>`).join('')}</select></label>
+      <label class="field"><span>Effet de fond animé</span><select data-common="fx">${Object.entries(V.BG_FX).map(([k, l]) => `<option value="${k}" ${(s.fx || 'aucun') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>`;
   hydrateInspector();
 }
