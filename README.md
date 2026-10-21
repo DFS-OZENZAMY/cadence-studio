@@ -19,7 +19,11 @@ Crée des vidéos de marque de qualité professionnelle pour tes clients, de la 
   - enregistrement au micro directement dans l’éditeur, ou import d’un fichier audio ;
   - voix IA premium en option (ElevenLabs via fal.ai, environ 0,10 $ pour 1 000 caractères).
 - **Scène Présentateur** : avatar à côté du contenu, en médaillon ou plein cadre ; les points s’affichent au fil de la voix ; sous-titres synchronisés ; durée calée automatiquement sur la voix.
-- **Mixage audio** à l’export : voix + musique, la musique baisse automatiquement quand l’avatar parle.
+- **Musique** :
+  - **bibliothèque de 10 morceaux originaux composés par Cadence** (Élan, Café lo-fi, Ambiance douce, Énergie, Cinématique, Inspiration, Groove funk, Tech minimal, Acoustique, Lounge luxe) : libres de droits, sans crédit, joués par un synthétiseur intégré et ajustés à la durée exacte de chaque vidéo ;
+  - **import de tes propres musiques** (MP3, WAV, M4A), rangées dans une médiathèque réutilisable ;
+  - écoute avant d’ajouter, volume, point de départ du morceau, fondus automatiques, et baisse automatique de la musique quand un personnage parle ;
+  - musique enregistrée dans le projet, entendue dans l’aperçu et mixée à l’export.
 - **Suivi des coûts IA** : estimation avant chaque génération et total du mois dans les Réglages.
 - **Historique des exports**, accès protégé par mot de passe.
 
@@ -64,6 +68,7 @@ public/
   app.js                   Écrans, éditeur, export
   engine.js                Moteur d’animation, mixage audio et encodage MP4
   avatar.js                Personnages cartoon animés et galerie
+  music.js                 Bibliothèque musicale (synthétiseur intégré)
   vendor/mp4-muxer.mjs     Multiplexeur MP4 (MIT)
 worker/index.js            API Cloudflare : accès, clients, projets, avatars, médias, IA, exports
 wrangler.jsonc             Configuration Cloudflare (Worker + D1)

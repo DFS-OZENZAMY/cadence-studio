@@ -19,6 +19,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS media_chunks (media_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (media_id, idx))`,
   `CREATE TABLE IF NOT EXISTS avatars (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS ai_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, status_url TEXT, response_url TEXT, result_media TEXT, result_meta TEXT, cost REAL, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS music (id TEXT PRIMARY KEY, name TEXT NOT NULL, media_id TEXT NOT NULL, duration REAL, size INTEGER, created_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, project_id TEXT, project_name TEXT, client_id TEXT, format TEXT, quality TEXT, duration REAL, size INTEGER, created_at INTEGER NOT NULL)`,
 ];
 let ready = null;
@@ -379,6 +380,28 @@ async function api(req, env, url) {
       }
     }
     return json(publicJob(job));
+  }
+
+  // --- Musiques importées
+  if (path === '/api/music') {
+    if (m === 'GET') {
+      const { results } = await db.prepare('SELECT * FROM music ORDER BY created_at DESC').all();
+      return json(results.map((r) => ({ id: r.id, name: r.name, media: r.media_id, duration: r.duration, size: r.size, createdAt: r.created_at })));
+    }
+    if (m === 'POST') {
+      const b = await body(req);
+      const md = await db.prepare('SELECT size, kind FROM media WHERE id = ?').bind(String(b.media || '')).first();
+      if (!md || md.kind !== 'audio') return fail('Fichier audio introuvable');
+      const id = uid();
+      await db.prepare('INSERT INTO music (id, name, media_id, duration, size, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, str(b.name, 120, 'Nom'), b.media, +b.duration || 0, md.size, Date.now()).run();
+      return json({ id }, 201);
+    }
+  }
+  mm = path.match(/^\/api\/music\/([\w-]{8,64})$/);
+  if (mm && m === 'DELETE') {
+    const r = await db.prepare('SELECT media_id FROM music WHERE id = ?').bind(mm[1]).first();
+    if (r) await db.batch([db.prepare('DELETE FROM music WHERE id = ?').bind(mm[1]), db.prepare('DELETE FROM media WHERE id = ?').bind(r.media_id), db.prepare('DELETE FROM media_chunks WHERE media_id = ?').bind(r.media_id)]);
+    return json({ ok: true });
   }
 
   // --- Exports (historique)

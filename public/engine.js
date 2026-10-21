@@ -4,6 +4,8 @@
  */
 import { Muxer, ArrayBufferTarget } from './vendor/mp4-muxer.mjs';
 import { drawCharacter, synthTalk, DEFAULT_CHAR } from './avatar.js';
+import { renderTrack, bufferToWav, TRACKS as MUSIC_TRACKS } from './music.js';
+export { MUSIC_TRACKS };
 export { DEFAULT_CHAR };
 export const VOICE_DELAY = 0.5;
 
@@ -1597,6 +1599,18 @@ export async function prepareAssets(project, brand, opts = {}) {
     }
     await Promise.all(tasks);
   }
+  const mus = project.music;
+  if (mus && (mus.track || mus.media)) {
+    let buf = null, key = '';
+    try {
+      if (mus.kind === 'library' && MUSIC_TRACKS[mus.track]) { buf = await renderTrack(mus.track, timeline(project).total + 2); key = `${mus.track}:${buf.length}`; }
+      else if (mus.media && opts.media) { buf = await cachedMedia(`music:${mus.media}`, async () => decodeAudio(await (await opts.media(mus.media)).arrayBuffer())); key = mus.media; }
+    } catch (e) { console.warn('Musique illisible', e); }
+    if (buf) {
+      res.music = { buffer: buf, volume: mus.volume ?? 0.6, offset: Math.max(0, +mus.offset || 0), duck: mus.duck !== false };
+      if (opts.preview) res.music.el = await cachedMedia(`musicel:${key}`, async () => { const a = new Audio(URL.createObjectURL(mus.kind === 'library' ? bufferToWav(buf) : await opts.media(mus.media))); a.preload = 'auto'; return a; });
+    }
+  }
   return res;
 }
 
@@ -1623,6 +1637,7 @@ export async function seekVideos(project, assets, time, fps = 30) {
 export function syncPreview(project, assets, time, playing, onSeeked) {
   if (!assets) return;
   const actV = new Set(), actA = new Set();
+  let voiceOn = false;
   for (const it of timeline(project).items) {
     if (it.scene.type !== 'presentateur') continue;
     const p = it.scene.props || {}, lt = time - it.start - VOICE_DELAY, inScene = time >= it.start && time < it.end;
@@ -1638,12 +1653,22 @@ export function syncPreview(project, assets, time, playing, onSeeked) {
       }
     }
     const vo = p.voice && assets.voices?.[p.voice];
+    if (vo && inScene && lt >= 0 && lt < vo.duration) voiceOn = true;
     if (vo && inScene) {
       actA.add(vo.el);
       if (playing && lt >= 0 && lt < vo.duration) {
         if (vo.el.paused) { vo.el.currentTime = lt; vo.el.play().catch(() => {}); } else if (Math.abs(vo.el.currentTime - lt) > 0.3) vo.el.currentTime = lt;
       } else if (!vo.el.paused) vo.el.pause();
     }
+  }
+  const mu = assets.music;
+  if (mu?.el) {
+    const el = mu.el, target = time + mu.offset, total = timeline(project).total;
+    if (playing && el.duration && target < el.duration && time < total) {
+      if (el.paused) { el.currentTime = target; el.play().catch(() => {}); } else if (Math.abs(el.currentTime - target) > 0.3) el.currentTime = target;
+    } else if (!el.paused) el.pause();
+    const fade = Math.min(1, time / 0.6, Math.max(0, (total - time) / 1.8));
+    el.volume = clamp(mu.volume * (mu.duck && voiceOn ? 0.25 : 1) * fade, 0, 1);
   }
   for (const v of Object.values(assets.videos || {})) if (!actV.has(v) && !v.paused) v.pause();
   for (const vo of Object.values(assets.voices || {})) if (!actA.has(vo.el) && !vo.el.paused) vo.el.pause();
@@ -1683,21 +1708,22 @@ async function pickAudioConfig(sampleRate) {
   return null;
 }
 /** Mixe la musique et les voix ; la musique baisse automatiquement quand quelqu'un parle. */
-async function mixAudio({ music, volume = 0.8, voices, total }) {
+async function mixAudio({ music, musicBuffer = null, offset = 0, duck = true, volume = 0.8, voices, total }) {
   const sr = 48000;
   const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr);
   const vs = [...voices].sort((x, y) => x.at - y.at);
-  if (music) {
-    const decoded = await decodeAudio(await music.arrayBuffer());
-    const src = off.createBufferSource(); src.buffer = decoded; src.loop = decoded.duration < total;
-    const g = off.createGain(); const duck = volume * 0.25;
+  if (music || musicBuffer) {
+    const decoded = musicBuffer || await decodeAudio(await music.arrayBuffer());
+    const src = off.createBufferSource(); src.buffer = decoded; src.loop = decoded.duration - offset < total;
+    if (src.loop) { src.loopStart = Math.min(offset, Math.max(0, decoded.duration - 1)); src.loopEnd = decoded.duration; }
+    const g = off.createGain(); const duckLevel = duck ? volume * 0.25 : volume;
     let level = 0, last = 0;
     const hold = (time) => { time = Math.max(time, last); g.gain.setValueAtTime(level, time); last = time; };
     const ramp = (time, v) => { time = Math.max(time, last + 0.01); g.gain.linearRampToValueAtTime(v, time); last = time; level = v; };
     g.gain.setValueAtTime(0, 0); ramp(Math.min(0.6, total / 4), volume);
-    for (const v of vs) { hold(v.at - 0.35); ramp(v.at, duck); hold(v.end); ramp(v.end + 0.45, volume); }
+    for (const v of vs) { hold(v.at - 0.35); ramp(v.at, duckLevel); hold(v.end); ramp(v.end + 0.45, volume); }
     hold(total - 1.8); ramp(total, 0);
-    src.connect(g); g.connect(off.destination); src.start(0);
+    src.connect(g); g.connect(off.destination); src.start(0, Math.min(offset, Math.max(0, decoded.duration - 0.1)));
   }
   for (const v of vs) { const src = off.createBufferSource(); src.buffer = v.buffer; src.connect(off.destination); src.start(Math.max(0, v.at)); }
   return off.startRendering();
@@ -1718,9 +1744,10 @@ export async function exportVideo(opts) {
   const voices = timeline(project).items
     .filter((it) => it.scene.type === 'presentateur' && it.scene.props?.voice && assets?.voices?.[it.scene.props.voice])
     .map((it) => { const v = assets.voices[it.scene.props.voice]; const at = it.start + VOICE_DELAY; return { buffer: v.buffer, at, end: Math.min(it.end, at + v.duration) }; });
-  if (music || voices.length) {
+  const am = assets?.music;
+  if (music || am || voices.length) {
     onProgress?.({ phase: 'prepare', progress: 0 });
-    audioBuf = await mixAudio({ music, volume, voices, total: frames / fps });
+    audioBuf = await mixAudio(music ? { music, volume, voices, total: frames / fps } : { musicBuffer: am?.buffer, offset: am?.offset || 0, duck: am?.duck !== false, volume: am?.volume ?? volume, voices, total: frames / fps });
     audio = await pickAudioConfig(audioBuf.sampleRate);
   }
   const target = new ArrayBufferTarget();

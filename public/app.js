@@ -1,7 +1,8 @@
 /* Cadence — application */
 import * as V from './engine.js';
 import { drawCharacter, SKINS, FURS, HAIR_COLORS, EYE_COLORS, OUTFIT_COLORS, OPTIONS, PRESETS, DEFAULT_CHAR, normChar, randomChar } from './avatar.js';
-const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND, DOMAINS, FONT_LIBRARY } = V;
+const { FORMATS, QUALITIES, FONTS, AMBIANCES, TRANSITIONS, BACKGROUNDS, SCENES, TEMPLATES, DEMO_BRAND, DOMAINS, FONT_LIBRARY, MUSIC_TRACKS } = V;
+import { renderTrack } from './music.js';
 
 /* =========================================================
    Utilitaires
@@ -52,6 +53,7 @@ const ICONS = {
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
   start: '<path d="M6 5v14M18 6l-9 6 9 6z"/>',
   avatars: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  musicnav: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
   mic: '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   upload: '<path d="M12 21V9M7 14l5-5 5 5M4 4h16"/>',
   spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
@@ -255,7 +257,7 @@ async function brandAssets(brand) {
 /* =========================================================
    État global
    ========================================================= */
-const state = { studio: 'Cadence', clients: [], projects: [], avatars: [], ai: { configured: false, monthSpent: 0 }, filter: 'all', salt: '', authed: false };
+const state = { studio: 'Cadence', clients: [], projects: [], avatars: [], music: [], ai: { configured: false, monthSpent: 0 }, filter: 'all', salt: '', authed: false };
 const clientById = (id) => state.clients.find((c) => c.id === id);
 const brandOf = (clientId) => { const c = clientById(clientId); return c ? V.normBrand({ ...c.brand, name: c.name }) : V.normBrand(DEMO_BRAND); };
 
@@ -326,14 +328,14 @@ function authScreen(mode, message = '') {
   });
 }
 async function loadAll() {
-  const [clients, projects, avatars, ai] = await Promise.all([api('/api/clients'), api('/api/projects'), api('/api/avatars'), api('/api/ai/status').catch(() => state.ai)]);
-  state.clients = clients; state.projects = projects; state.avatars = avatars; state.ai = ai;
+  const [clients, projects, avatars, ai, music] = await Promise.all([api('/api/clients'), api('/api/projects'), api('/api/avatars'), api('/api/ai/status').catch(() => state.ai), api('/api/music').catch(() => [])]);
+  state.clients = clients; state.projects = projects; state.avatars = avatars; state.ai = ai; state.music = music;
 }
 
 /* =========================================================
    Navigation
    ========================================================= */
-const NAV = [['projets', 'Projets', 'projects'], ['clients', 'Clients', 'clients'], ['avatars', 'Avatars', 'avatars'], ['modeles', 'Modèles', 'templates'], ['exports', 'Exports', 'exports'], ['reglages', 'Réglages', 'settings']];
+const NAV = [['projets', 'Projets', 'projects'], ['clients', 'Clients', 'clients'], ['avatars', 'Avatars', 'avatars'], ['musique', 'Musique', 'musicnav'], ['modeles', 'Modèles', 'templates'], ['exports', 'Exports', 'exports'], ['reglages', 'Réglages', 'settings']];
 function route() {
   if (!state.authed) return;
   const h = location.hash.replace(/^#\/?/, '');
@@ -341,7 +343,7 @@ function route() {
   if (page === 'editeur' && id) return openEditor(id);
   stopEditor();
   const p = NAV.some(([k]) => k === page) ? page : 'projets';
-  const counts = { projets: state.projects.length, clients: state.clients.length, avatars: state.avatars.length };
+  const counts = { projets: state.projects.length, clients: state.clients.length, avatars: state.avatars.length, musique: state.music.length || null };
   $('#root').innerHTML = `<div class="shell">
     <nav class="rail" aria-label="Navigation principale">
       <div class="wordmark">${LOGO}Cadence</div>
@@ -869,6 +871,80 @@ function photoAvatarDialog(id = null, onSaved) {
 }
 
 /* =========================================================
+   Musique : écoute, import, page
+   ========================================================= */
+const listen = { ctx: null, src: null, el: null, key: null, btn: null };
+function stopListen() {
+  try { listen.src?.stop(); } catch { /* rien */ }
+  listen.el?.pause();
+  if (listen.btn) listen.btn.innerHTML = ic('play');
+  Object.assign(listen, { src: null, el: null, key: null, btn: null });
+}
+async function toggleListen(btn, kind, id) {
+  const key = `${kind}:${id}`;
+  if (listen.key === key) return stopListen();
+  stopListen();
+  listen.key = key; listen.btn = btn; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    if (kind === 'library') {
+      const buf = await renderTrack(id, 18);
+      if (listen.key !== key) return;
+      listen.ctx ||= new AudioContext(); await listen.ctx.resume();
+      const src = listen.ctx.createBufferSource(); src.buffer = buf;
+      const g = listen.ctx.createGain(); g.gain.setValueAtTime(0, listen.ctx.currentTime); g.gain.linearRampToValueAtTime(0.9, listen.ctx.currentTime + 0.3);
+      src.connect(g); g.connect(listen.ctx.destination); src.start(); src.onended = () => { if (listen.key === key) stopListen(); };
+      listen.src = src;
+    } else {
+      const el = new Audio(await mediaSrc(id)); if (listen.key !== key) return;
+      listen.el = el; el.onended = () => { if (listen.key === key) stopListen(); }; await el.play();
+    }
+    btn.innerHTML = ic('pause');
+  } catch (e) { console.error(e); stopListen(); toast('Écoute impossible.', 'error'); }
+}
+async function importMusic(file) {
+  if (!file) return null;
+  if (!/^audio\//.test(file.type) && !/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(file.name)) { toast('Choisis un fichier audio (MP3, WAV, M4A…).', 'error'); return null; }
+  if (file.size > 55e6) { toast('Fichier trop lourd (55 Mo maximum).', 'error'); return null; }
+  let duration = 0;
+  try { const ac = new AudioContext(); duration = (await ac.decodeAudioData(await file.arrayBuffer())).duration; ac.close(); }
+  catch { toast('Ce fichier audio est illisible.', 'error'); return null; }
+  toast('Import de la musique…');
+  const blob = file.type ? file : new Blob([file], { type: 'audio/mpeg' });
+  const media = await uploadMedia(blob, 'audio', file.name);
+  const name = file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim().slice(0, 120) || 'Ma musique';
+  const r = await api('/api/music', { method: 'POST', body: { name, media, duration } });
+  await loadAll();
+  toast(`${name} ajoutée à tes musiques`, 'ok');
+  return state.music.find((x) => x.id === r.id);
+}
+const trackCard = (id, t, extra = '') => `<div class="track-card" style="--tc:${t.color}">
+  <button class="track-play" data-listen="library" data-id="${id}" aria-label="Écouter ${esc(t.name)}">${ic('play')}</button>
+  <div class="track-info"><strong>${esc(t.name)}</strong><span>${esc(t.mood)}, ${t.bpm} BPM</span><span class="track-tags">${t.tags.map((x) => `<i>${esc(x)}</i>`).join('')}</span></div>${extra}</div>`;
+const myMusicRow = (mu, extra = '') => `<div class="track-card mine">
+  <button class="track-play" data-listen="upload" data-id="${mu.media}" aria-label="Écouter ${esc(mu.name)}">${ic('play')}</button>
+  <div class="track-info"><strong>${esc(mu.name)}</strong><span>${fmtDur(mu.duration || 0)}, ${fmtBytes(mu.size || 0)}</span></div>${extra}</div>`;
+PAGES.musique = () => `
+  <header class="page-head"><div><h1>Musique</h1><p class="sub">Une bibliothèque de morceaux libres de droits, et tes propres musiques, prêtes à glisser dans tes vidéos.</p></div>
+    <button class="btn primary lg" data-act="importMusic">${ic('upload')}Importer une musique</button></header>
+  <section class="music-sec"><div class="music-head"><h2>Bibliothèque Cadence</h2><p class="muted">${Object.keys(MUSIC_TRACKS).length} morceaux originaux composés par Cadence : libres de droits, sans crédit à mentionner, et ajustés automatiquement à la durée de chaque vidéo.</p></div>
+    <div class="track-grid">${Object.entries(MUSIC_TRACKS).map(([id, t]) => trackCard(id, t)).join('')}</div></section>
+  <section class="music-sec"><div class="music-head"><h2>Mes musiques</h2><p class="muted">MP3, WAV ou M4A, 55 Mo maximum. Vérifie que tu as le droit d’utiliser la musique dans des vidéos commerciales.</p></div>
+    <div class="drop-zone" id="musicDrop">${state.music.length ? `<div class="track-grid">${state.music.map((mu) => myMusicRow(mu, `<button class="icon-btn" data-act="delMusic" data-id="${mu.id}" aria-label="Supprimer" title="Supprimer">${ic('trash')}</button>`)).join('')}</div>`
+      : `<div class="empty" style="padding:36px 20px"><strong>Glisse un fichier audio ici</strong><p>ou clique sur « Importer une musique ». Elle sera disponible dans toutes tes vidéos.</p></div>`}</div></section>`;
+AFTER.musique = () => {
+  const dz = $('#musicDrop');
+  dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+  dz.addEventListener('drop', async (e) => { e.preventDefault(); dz.classList.remove('drag'); for (const f of e.dataTransfer.files) await importMusic(f).catch((x) => toast(x.message, 'error')); route(); });
+};
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-listen]'); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  toggleListen(b, b.dataset.listen, b.dataset.id);
+}, true);
+const pickAudioFile = () => new Promise((res) => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac'; i.onchange = () => res(i.files[0] || null); i.click(); });
+
+/* =========================================================
    Page : Modèles
    ========================================================= */
 PAGES.modeles = () => {
@@ -959,6 +1035,12 @@ const ACT = {
   newClient: () => brandDialog(),
   editClient: (el) => brandDialog(el.dataset.id),
   useTpl: (el) => newVideoDialog(el.dataset.tpl),
+  importMusic: async () => { const f = await pickAudioFile(); if (!f) return; try { await importMusic(f); } catch (e) { toast(e.message, 'error'); } if (!ed) route(); },
+  delMusic: async (el) => {
+    const mu = state.music.find((x) => x.id === el.dataset.id); if (!mu) return;
+    if (!(await confirmBox({ title: `Supprimer « ${mu.name} » ?`, text: 'Les vidéos qui l’utilisent n’auront plus de musique.', ok: 'Supprimer', danger: true }))) return;
+    stopListen(); await api(`/api/music/${mu.id}`, { method: 'DELETE' }); await loadAll(); route(); toast('Musique supprimée');
+  },
   newIllustrated: () => illustratedDialog(),
   gallery: () => galleryDialog(),
   newPhotoAvatar: () => photoAvatarDialog(),
@@ -995,6 +1077,7 @@ function stopEditor() {
   cancelAnimationFrame(ed.raf); ed.ro?.disconnect(); clearInterval(ed.jobTimer);
   Object.values(ed.assets.voices || {}).forEach((v) => v.el.pause());
   Object.values(ed.assets.videos || {}).forEach((v) => v.pause());
+  ed.assets.music?.el?.pause(); stopListen();
   removeEventListener('keydown', ed.onKey);
   ed = null;
 }
@@ -1060,6 +1143,7 @@ function renderEditor() {
           <button class="play-btn" data-ed="play" id="playBtn" aria-label="Lecture">${ic('play')}</button>
           <span class="timecode" id="timecode">00:00.0 <span>/ 00:00.0</span></span>
           <div class="scrub" id="scrub" role="slider" aria-label="Position" tabindex="0"><div class="scrub-track" id="scrubTrack"></div><div class="scrub-fill" id="scrubFill"></div><div class="scrub-knob" id="scrubKnob"></div></div>
+ <button class="music-chip" data-ed="music" id="musicChip" title="Musique de la vidéo">${ic('musicnav')}<span>${esc(musicLabel())}</span></button>
           <button class="icon-btn" data-ed="loop" id="loopBtn" title="Lecture en boucle" aria-label="Boucle" style="color:${ed.loop ? '#fff' : ''}">${ic('loop')}</button>
         </div>
         <div class="film" id="film"></div>
@@ -1236,6 +1320,67 @@ function aiVideoSection(s) {
     ${state.ai.configured ? '' : '<span class="hint" style="color:var(--stage-muted)">Ajoute une clé fal.ai dans Réglages pour générer.</span>'}`;
   return `<div class="insp-sec"><div class="label">Vidéo IA de l’avatar</div>${body}</div>`;
 }
+/* ---------- Musique de la vidéo ---------- */
+function musicLabel() {
+  const m = ed?.project?.data?.music;
+  if (!m) return 'Ajouter une musique';
+  return m.kind === 'library' ? (MUSIC_TRACKS[m.track]?.name || 'Musique') : (m.name || 'Ma musique');
+}
+function refreshMusicChip() { const c = $('#musicChip span'); if (c) c.textContent = musicLabel(); }
+function musicSection() {
+  const m = P().data.music;
+  if (!m) return `<div class="insp-sec"><div class="label">Musique</div><button class="btn" data-ed="music" style="justify-self:start">${ic('musicnav')}Ajouter une musique</button></div>`;
+  const mu = m.kind === 'upload' ? state.music.find((x) => x.media === m.media) : null;
+  const maxOff = mu ? Math.max(0, Math.floor((mu.duration || 0) - 5)) : 0;
+  return `<div class="insp-sec"><div class="label">Musique</div>
+    <div class="row" style="padding:10px;border-radius:10px;background:var(--stage-2);border:1px solid var(--stage-line)">${ic('musicnav')}<span style="flex:1;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(musicLabel())}</span>
+      <button class="btn ghost" data-ed="music">Changer</button><button class="icon-btn" data-ed="musicRemove" aria-label="Retirer la musique" title="Retirer">${ic('x')}</button></div>
+    <div class="field"><span>Volume</span><div class="range-row"><input type="range" min="0.05" max="1" step="0.05" value="${m.volume ?? 0.6}" data-music="volume" aria-label="Volume de la musique"><output data-music-out="volume">${Math.round((m.volume ?? 0.6) * 100)} %</output></div></div>
+    ${maxOff > 0 ? `<div class="field"><span>Commencer le morceau à</span><div class="range-row"><input type="range" min="0" max="${maxOff}" step="1" value="${m.offset || 0}" data-music="offset" aria-label="Début du morceau"><output data-music-out="offset">${fmtTime(m.offset || 0).slice(0, 5)}</output></div></div>` : ''}
+    <label class="switch"><input type="checkbox" data-music="duck" ${m.duck !== false ? 'checked' : ''}>Baisser la musique quand un personnage parle</label>
+  </div>`;
+}
+function musicDialog() {
+  const cur = P().data.music;
+  const pick = async (music) => {
+    stopListen(); beforeChange();
+    if (music) P().data.music = { volume: cur?.volume ?? 0.6, duck: cur?.duck ?? true, ...music };
+    else delete P().data.music;
+    closeModal();
+    if (music?.kind === 'library') toast('Composition de la musique…');
+    await reloadAssets(); if (!ed) return;
+    refreshMusicChip(); changed({ inspector: ed.tab === 'video' });
+    toast(music ? `Musique « ${musicLabel()} » ajoutée` : 'Musique retirée', 'ok');
+  };
+  const draw = (m) => {
+    $('#musicMine', m).innerHTML = state.music.length ? state.music.map((mu) => myMusicRow(mu, `<button class="btn ${cur?.media === mu.media ? '' : 'primary'}" data-use-mine="${mu.id}">${cur?.media === mu.media ? 'Utilisée' : 'Utiliser'}</button>`)).join('')
+      : '<p class="muted" style="padding:6px 2px">Aucune musique importée pour l’instant.</p>';
+  };
+  openModal(`<div class="dlg">
+    <div class="dlg-head"><div><h2>Musique de la vidéo</h2><p>Écoute avec ▶, puis choisis. La musique s’adapte à la durée de la vidéo, avec un fondu à la fin.</p></div><button class="icon-btn" data-close aria-label="Fermer">${ic('x')}</button></div>
+    <div class="music-head"><h3>Bibliothèque Cadence <span class="badge-free">Libre de droits</span></h3></div>
+    <div class="track-grid compact">${Object.entries(MUSIC_TRACKS).map(([id, t]) => trackCard(id, t, `<button class="btn ${cur?.kind === 'library' && cur.track === id ? '' : 'primary'}" data-use-lib="${id}">${cur?.kind === 'library' && cur.track === id ? 'Utilisée' : 'Utiliser'}</button>`)).join('')}</div>
+    <div class="music-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3>Mes musiques</h3><button class="btn" data-import-music>${ic('upload')}Importer un fichier</button></div>
+    <div class="track-grid compact" id="musicMine"></div>
+    <div class="dlg-foot">${cur ? '<button class="btn ghost danger" data-no-music>Retirer la musique</button>' : ''}<span class="spacer"></span><button class="btn" data-close>Fermer</button></div></div>`, {
+    size: 'wide',
+    onClose: () => stopListen(),
+    onMount: (m) => {
+      draw(m);
+      m.querySelector('.dlg').addEventListener('click', async (e) => {
+        const lib = e.target.closest('[data-use-lib]'), mine = e.target.closest('[data-use-mine]');
+        if (lib) pick({ kind: 'library', track: lib.dataset.useLib });
+        if (mine) { const mu = state.music.find((x) => x.id === mine.dataset.useMine); if (mu) pick({ kind: 'upload', media: mu.media, name: mu.name, offset: 0 }); }
+        if (e.target.closest('[data-no-music]')) pick(null);
+        if (e.target.closest('[data-import-music]')) {
+          const f = await pickAudioFile(); if (!f) return;
+          try { const mu = await importMusic(f); if (mu) pick({ kind: 'upload', media: mu.media, name: mu.name, offset: 0 }); } catch (x) { toast(x.message, 'error'); }
+        }
+      });
+    },
+  });
+}
+
 /* ---------- Polices et tailles ---------- */
 function textTarget(scope) { return scope === 'scene' ? (curScene().text ||= {}) : (P().data.text ||= {}); }
 function textSection(scope, s = null) {
@@ -1319,6 +1464,7 @@ function videoPanel() {
         <span class="swatches">${['primary', 'secondary', 'dark', 'light'].map((k) => `<i style="background:${esc(ed.brand.colors[k])}"></i>`).join('')}</span>
         <span style="flex:1;font-weight:700">${esc(c ? c.name : 'Démonstration')}</span>
         ${c ? `<button class="btn ghost" data-ed="editBrand">${ic('edit')}Modifier</button>` : `<button class="btn ghost" data-ed="newBrand">${ic('plus')}Créer</button>`}</div></div>
+    ${musicSection()}
     ${textSection('video')}
     <label class="switch"><input type="checkbox" data-video="fadeIn" ${p.data.fadeIn ? 'checked' : ''}>Fondu au noir en ouverture</label>
     <label class="switch"><input type="checkbox" data-video="fadeOut" ${p.data.fadeOut !== false ? 'checked' : ''}>Fondu au noir en fin de vidéo</label>
@@ -1519,6 +1665,8 @@ function onEdClick(e) {
     confirmBox({ title: 'Générer la vidéo réaliste ?', text: `La photo de ${s.props.avatar?.name || 'l’avatar'} va être animée sur ${vo.duration.toFixed(1).replace('.', ',')} s de voix. Coût estimé : ${fmtUsd(cost)}, facturé par fal.ai.`, ok: `Générer pour ${fmtUsd(cost)}` })
       .then((ok) => { if (ok) startJob(s, 'videoJob', { model, imageMedia: s.props.avatar.photo, audioMedia: s.props.voice, duration: vo.duration, key: videoKey(s.props) }); });
   }
+  else if (a === 'music') musicDialog();
+  else if (a === 'musicRemove') { beforeChange(); delete P().data.music; reloadAssets().then(() => { refreshMusicChip(); changed({ inspector: true }); }); }
   else if (a === 'pickFont') fontDialog({ role: b.dataset.role, scope: b.dataset.scope });
   else if (a === 'resetText') {
     beforeChange();
@@ -1533,6 +1681,14 @@ function onInspector(e) {
   if (el.dataset.ttsVoice !== undefined) { if (s) { s.props.ttsVoice = el.value; changed(); } return; }
   if (el.dataset.freeVoice !== undefined) { if (s && e.type === 'change') { s.props.freeVoice = el.value; changed(); const fv = FREE_VOICES.find((x) => x.key === el.value); const st = $('#freeStatus'); if (st && fv) st.textContent = `Voix ${fv.label}. Téléchargement unique au premier usage : ${fv.size}.`; } return; }
   if (el.dataset.freeSpeed !== undefined) { if (s) { s.props.freeSpeed = +el.value; $('#freeSpeedOut').textContent = `×${(+el.value).toFixed(2).replace('.', ',')}`; if (e.type === 'change') changed(); } return; }
+  if (el.dataset.music) {
+    const mu = P().data.music; if (!mu) return;
+    const k = el.dataset.music;
+    if (k === 'duck') { if (e.type !== 'change') return; beforeChange(); mu.duck = el.checked; }
+    else { beforeChange(); mu[k] = +el.value; const o = $(`[data-music-out="${k}"]`); if (o) o.textContent = k === 'volume' ? `${Math.round(el.value * 100)} %` : fmtTime(+el.value).slice(0, 5); }
+    if (ed.assets.music) { ed.assets.music.volume = mu.volume ?? 0.6; ed.assets.music.offset = mu.offset || 0; ed.assets.music.duck = mu.duck !== false; }
+    setStatus('saving'); ed.save(); return;
+  }
   if (el.dataset.textscale) {
     if (e.type === 'change') return;
     const sc = el.dataset.scope; if (sc === 'scene' && !s) return;
@@ -1733,10 +1889,8 @@ function exportDialog() {
       <div class="field"><span>Qualité</span><div class="segmented" id="qual">${Object.entries(QUALITIES).map(([k, q]) => `<button type="button" data-q="${k}" aria-pressed="${k === 'fhd'}">${q.label.split(' ')[1]}</button>`).join('')}</div></div>
       <div class="field"><span>Fluidité</span><div class="segmented" id="fps"><button type="button" data-fps="30" aria-pressed="true">30 i/s</button><button type="button" data-fps="60" aria-pressed="false">60 i/s</button></div></div>
     </div>
-    <div class="field"><span>Musique (facultatif)</span>
-      <div class="row" style="flex-wrap:wrap"><button class="btn" type="button" id="musicBtn">${ic('music')}Choisir un fichier audio</button><span class="hint" id="musicName">MP3, WAV ou M4A. Fondu automatique au début et à la fin.</span></div>
-      <input type="file" accept="audio/*" id="musicFile" hidden>
-      <div class="range-row" id="volRow" hidden><span class="hint">Volume</span><input type="range" min="0" max="1" step="0.05" value="0.8" name="volume"><output id="volOut">80 %</output></div>
+    <div class="field"><span>Musique</span>
+      <div class="row" style="padding:10px 12px;border-radius:10px;background:var(--surface-2)">${ic('music')}<span style="flex:1">${p.data.music ? `<b>${esc(musicLabel())}</b>, volume ${Math.round((p.data.music.volume ?? 0.6) * 100)} %` : 'Aucune musique'}</span><button class="btn ghost" type="button" data-close-music>${p.data.music ? 'Modifier' : 'Ajouter'}</button></div>
     </div>
     <p class="form-error" id="exErr"></p>
     <div class="dlg-foot"><span class="hint">${esc(c?.name || 'Sans client')}, ${fmtDur(V.timeline(p.data).total)}</span><span class="spacer"></span><button class="btn" type="button" data-close>Annuler</button>
@@ -1746,14 +1900,12 @@ function exportDialog() {
       const form = $('#exportForm', m);
       const seg = (id, attr) => $(`#${id}`, m).addEventListener('click', (e) => { const b = e.target.closest(`[${attr}]`); if (!b) return; $$(`#${id} button`, m).forEach((x) => x.setAttribute('aria-pressed', x === b)); });
       seg('qual', 'data-q'); seg('fps', 'data-fps');
-      $('#musicBtn', m).addEventListener('click', () => $('#musicFile', m).click());
-      $('#musicFile', m).addEventListener('change', (e) => { music = e.target.files[0] || null; $('#musicName', m).textContent = music ? music.name : ''; $('#volRow', m).hidden = !music; });
-      form.volume.addEventListener('input', () => { $('#volOut', m).textContent = `${Math.round(form.volume.value * 100)} %`; });
+      $('[data-close-music]', m).addEventListener('click', () => { closeModal(); setTimeout(musicDialog, 50); });
       form.addEventListener('submit', (e) => {
         e.preventDefault();
         const formats = $$('input[name="fmt"]:checked', m).map((x) => x.value);
         if (!formats.length) { $('#exErr', m).textContent = 'Coche au moins un format.'; return; }
-        runExport({ formats, quality: $('#qual [aria-pressed="true"]', m).dataset.q, fps: +$('#fps [aria-pressed="true"]', m).dataset.fps, music, volume: +form.volume.value });
+        runExport({ formats, quality: $('#qual [aria-pressed="true"]', m).dataset.q, fps: +$('#fps [aria-pressed="true"]', m).dataset.fps, music: null, volume: 0.6 });
       });
     },
   });
