@@ -67,6 +67,15 @@ La base D1 `cadence-db` est créée automatiquement au premier déploiement, et 
 
 **Sécurité au premier lancement** : la première personne qui ouvre le site choisit le mot de passe du studio. Ouvre-le tout de suite après le déploiement. Pour plus de sûreté, ajoute avant le premier lancement une variable `SETUP_CODE` (Worker → Settings → Variables and Secrets) : ce code sera demandé pour créer le studio.
 
+## Activer Google Drive (facultatif, environ 10 minutes)
+
+1. Sur [console.cloud.google.com](https://console.cloud.google.com), crée un projet et active **Google Drive API**.
+2. **Écran de consentement OAuth** : type « Externe », ajoute l’autorisation `.../auth/drive.file`, puis publie l’application (ou ajoute les comptes testeurs, 100 maximum tant qu’elle n’est pas publiée). `drive.file` est une autorisation non sensible : pas d’audit de sécurité Google à prévoir.
+3. **Identifiants → Créer un ID client OAuth**, type « Application Web ». Origine JavaScript autorisée : l’adresse de ton studio (par exemple `https://cadence-studio.xxx.workers.dev`).
+4. Dans Cloudflare, Worker `cadence-studio` → Settings → Variables : ajoute `GOOGLE_CLIENT_ID` avec cet identifiant (ce n’est pas un secret), puis redéploie.
+
+Sans cette variable, l’enregistreur fonctionne quand même : les vidéos sont simplement téléchargées sur l’ordinateur.
+
 ## Développement local
 
 ```bash
