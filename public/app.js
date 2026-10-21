@@ -192,7 +192,8 @@ async function boot() {
     state.authed = true;
     route();
   } catch (e) {
-    $('#root').innerHTML = `<div class="empty" style="min-height:100vh;align-content:center"><strong>Impossible de joindre le serveur</strong><p>${esc(e.message)}</p><button class="btn primary" onclick="location.reload()">Réessayer</button></div>`;
+    $('#root').innerHTML = `<div class="empty" style="min-height:100vh;align-content:center"><strong>Impossible de joindre le serveur</strong><p>${esc(e.message)}</p><button class="btn primary" id="retryBtn">Réessayer</button></div>`;
+    $('#retryBtn').addEventListener('click', () => location.reload());
   }
 }
 function authScreen(mode, message = '') {
