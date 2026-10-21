@@ -105,7 +105,7 @@ export async function startSession(opts) {
   const thumbTimer = setTimeout(grabThumb, 1200);
   const cleanup = () => { clearTimeout(thumbTimer); ticker?.terminate(); tracks.forEach((t) => t.stop()); videoTrack.stop(); ac?.close().catch(() => {}); [sv, cv].forEach((v) => { if (v) v.srcObject = null; }); };
   const ctl = {
-    mime: rec.mimeType || mime, preview: canvas ? canvas.captureStream(15) : new MediaStream([videoTrack]), camStream: cam,
+    surface: screen?.getVideoTracks()[0]?.getSettings?.().displaySurface || '', mime: rec.mimeType || mime, preview: canvas ? canvas.captureStream(15) : new MediaStream([videoTrack]), camStream: cam,
     elapsed, paused: () => rec.state === 'paused',
     level: () => { if (!meter) return 0; const a = new Uint8Array(meter.fftSize); meter.getByteTimeDomainData(a); let m = 0; for (const v of a) m = Math.max(m, Math.abs(v - 128)); return m / 128; },
     pause() { if (rec.state === 'recording') { rec.pause(); pausedAt = performance.now(); } },

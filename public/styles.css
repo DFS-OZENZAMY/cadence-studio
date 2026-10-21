@@ -639,3 +639,12 @@ dialog[open] { animation: pop .18s ease-out; }
 .rv-share .spacer, .dlg-foot .spacer { flex: 1; }
 .steps-list { margin: 0; padding-left: 20px; display: grid; gap: 8px; line-height: 1.5; }
 .steps-list code { font-size: 12.5px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); }
+
+.pip-body.with-cam { grid-template-rows: minmax(0, 1fr) auto; gap: 10px; padding: 12px; box-sizing: border-box; }
+.pip-cam { width: min(100%, calc(100vh - 118px)); aspect-ratio: 1; border-radius: 50%; overflow: hidden; border: 4px solid #fff; box-shadow: 0 10px 30px rgba(0,0,0,.5); background: #000; }
+.pip-cam video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+.rec-hud.pip { flex-wrap: wrap; justify-content: center; max-width: 100%; }
+.rec-cam-float { position: fixed; left: 24px; bottom: 96px; width: 168px; height: 168px; border-radius: 50%; object-fit: cover; transform: scaleX(-1); border: 4px solid #fff; box-shadow: 0 14px 40px rgba(0,0,0,.5); z-index: 149; pointer-events: none; background: #000; }
+.rec-hud .btn:not(.rec) { background: #2A2A35; color: #fff; border: 1px solid #3a3a46; }
+.rec-hud .btn:not(.rec):hover { background: #34344a; }
+.rec-hud .icon-btn { color: #cfcfda; }
